@@ -5,10 +5,16 @@ import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
+import org.hibernate.Query;
+import org.hibernate.Session;
 
+import quant.dao.LiveOrderPairsHome;
+import quant.entity.LiveOrderPairs;
+import quant.utils.HibernateUtil;
 import traderobot.metaobjects.Depth;
 import traderobot.metaobjects.Order;
 import traderobot.trade.Tradable;
+import traderobot.trade.TraderFactory;
 
 public class SimpleHedge {
 	
@@ -45,8 +51,10 @@ public class SimpleHedge {
 	
 	private Long cycle = null;
 	
-	private List<Order> orders = null;
+	private List<LiveOrderPairs> liveOrderPairs = null;
 
+	private LiveOrderPairsHome liveOrderPairsHome = null;
+	
 	/**
 	 * 验证参数的合理性
 	 */
@@ -123,18 +131,68 @@ public class SimpleHedge {
 		return result;
 	}
 	
+	//初始化相关变量
+	private void init(){
+		if(null == trader){
+			trader = TraderFactory.newInstance(plantform);
+		}
+		
+		if(null == liveOrderPairsHome){
+			liveOrderPairsHome = new LiveOrderPairsHome();
+		}
+	}
+	
+	//更新订单信息
+	@SuppressWarnings("unchecked")
+	private void updateOrders(){
+		Session session = HibernateUtil.getSession();
+		
+		//检索没有完全完成的对冲交易对
+		String hql = "from LiveOrderPairs where currency:=currency and (buyOrderStatus!='FILLED' or sellOrderStatus!='FILLED')";
+		Query query = session.createQuery(hql);
+		query.setString("currency", currency);
+		List <LiveOrderPairs> persistedOrderPairs = query.list();
+		for(LiveOrderPairs orderPairs : persistedOrderPairs){
+			Boolean buyOrderChanged = false; 
+			Boolean sellOrderChanged = false;
+			if(!"FILLED".equals(orderPairs.getBuyOrderStatus())){
+				Order order = trader.getOrder(currency, orderPairs.getBuyOrderId());
+				orderPairs.setBuyOrderPrice(order.getPrice());
+				orderPairs.setBuyOrderStatus(order.getStatus());
+				buyOrderChanged = true;
+			}
+			if(!"FILLED".equals(orderPairs.getSellOrderStatus())){
+				Order order = trader.getOrder(currency, orderPairs.getSellOrderId());
+				orderPairs.setSellOrderPrice(order.getPrice());
+				orderPairs.setSellOrderStatus(order.getStatus());
+				sellOrderChanged = true;
+			}
+			if (buyOrderChanged && sellOrderChanged){
+				liveOrderPairsHome.merge(orderPairs);
+			}
+		}
+	}
 	
 	public void earnMoney(){
 		
 		this.validateParameters();
+		this.init();
+		this.updateOrders();
+		
 		
 		while(true){
 			;
 		}
+		
 	}
 	
-	//同步订单
-	private void syncOrders(){
+	//读取订单信息
+	private void readOrders(){
+		;
+	}
+	
+	//写订单信息
+	private void writeOrders(){
 		;
 	}
 	
