@@ -1,6 +1,10 @@
 package quant.strategy;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
+import java.util.ArrayList;
+import java.util.Collections;
+import java.util.Comparator;
 import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
@@ -13,6 +17,7 @@ import quant.entity.LiveOrderPairs;
 import quant.utils.HibernateUtil;
 import traderobot.metaobjects.Depth;
 import traderobot.metaobjects.Order;
+import traderobot.metaobjects.Ticker;
 import traderobot.trade.Tradable;
 import traderobot.trade.TraderFactory;
 
@@ -49,10 +54,19 @@ public class SimpleHedge {
 	//操作的币种
 	private String currency = null;
 	
-	private Long cycle = null;
+	//操作周期, 默认10毫秒
+	private Long cycle = 10L;
 	
 	private List<LiveOrderPairs> liveOrderPairs = null;
 
+	private List<Order> liveSellOrders = null;
+	
+	private List<Order> liveBuyOrders = null;
+	
+	private List<LiveOrderPairs> planSellOrderPairs = null;
+	
+	private List<LiveOrderPairs> planBuyOrderPairs = null;
+	
 	private LiveOrderPairsHome liveOrderPairsHome = null;
 	
 	/**
@@ -140,6 +154,23 @@ public class SimpleHedge {
 		if(null == liveOrderPairsHome){
 			liveOrderPairsHome = new LiveOrderPairsHome();
 		}
+		
+		if(null == liveSellOrders){
+			liveSellOrders = new ArrayList<Order>();
+		}
+		
+		if(null == liveBuyOrders){
+			liveBuyOrders = new ArrayList<Order>();
+		}
+		
+		if(null == planBuyOrderPairs){
+			planBuyOrderPairs = new ArrayList<LiveOrderPairs>();
+		}
+		
+		if(null == planSellOrderPairs){
+			planSellOrderPairs = new ArrayList<LiveOrderPairs>();
+		}
+		
 	}
 	
 	//更新订单信息
@@ -155,18 +186,35 @@ public class SimpleHedge {
 		for(LiveOrderPairs orderPairs : persistedOrderPairs){
 			Boolean buyOrderChanged = false; 
 			Boolean sellOrderChanged = false;
-			if(!"FILLED".equals(orderPairs.getBuyOrderStatus())){
+			//若买入交易对没有完成，且买入交易并非计划交易
+			String buyOrderStatus = orderPairs.getBuyOrderStatus();
+			if(!"FILLED".equals(buyOrderStatus) && !"PLAN".equals(buyOrderStatus)){
 				Order order = trader.getOrder(currency, orderPairs.getBuyOrderId());
 				orderPairs.setBuyOrderPrice(order.getPrice());
 				orderPairs.setBuyOrderStatus(order.getStatus());
+				liveBuyOrders.add(order);
 				buyOrderChanged = true;
 			}
-			if(!"FILLED".equals(orderPairs.getSellOrderStatus())){
+			
+			String sellOrderStatus = orderPairs.getSellOrderStatus();
+			if(!"FILLED".equals(sellOrderStatus) && !"PLAN".equals(sellOrderStatus)){
 				Order order = trader.getOrder(currency, orderPairs.getSellOrderId());
 				orderPairs.setSellOrderPrice(order.getPrice());
 				orderPairs.setSellOrderStatus(order.getStatus());
+				liveSellOrders.add(order);
 				sellOrderChanged = true;
 			}
+			
+			//将计划下的订单对中包含买单的交易对放入到 planBuyOrderPairs 中
+			if("PLAN".equals(buyOrderStatus)){
+				planBuyOrderPairs.add(orderPairs);
+			}
+			
+			if("PLAN".equals(sellOrderStatus)){
+				planSellOrderPairs.add(orderPairs);
+			}
+			
+			//订单发生变化，更新数据库订单的状态
 			if (buyOrderChanged && sellOrderChanged){
 				liveOrderPairsHome.merge(orderPairs);
 			}
@@ -174,29 +222,158 @@ public class SimpleHedge {
 	}
 	
 	public void earnMoney(){
-		
-		this.validateParameters();
+		//校验参数
+		if(!this.validateParameters()){
+			logger.fatal("参数校验失败！退出系统。");
+			System.exit(0);
+		}
+		//初始化对象
 		this.init();
+		
+		//同步订单信息
 		this.updateOrders();
 		
-		
 		while(true){
-			;
+			delay(cycle);
+			Depth depth = trader.getDepth(currency);
+			//若获取深度信息失败，则暂停1分钟后再继续
+			if(depth == null){
+				delay(60000L);
+				continue;
+			}
+			
+			Ticker ticker = trader.getTicker(currency);
+			if(null == ticker){
+				delay(60000L);
+				continue;
+			}
+			
+			
+			// 计算买入价与卖出价
+			BigDecimal buyPrice = null;	//买入价
+			BigDecimal sellPrice = null; //卖出价			
+			this.calculatePrice(depth, ticker, buyPrice, sellPrice);
+			
+			// 计算最接近当前价格的订单价格
+			BigDecimal maxBuyPrice = null;
+			BigDecimal minSellPrice = null;
+			closestPrice(maxBuyPrice, minSellPrice);
+			
+			//不满足下单条件，更新订单信息，并跳过此轮
+			if(!isMeetOrderCondition(buyPrice, sellPrice, maxBuyPrice, minSellPrice)){
+				
+				continue;
+			}
+			
+			//满足条件，下单，更新订单信息
+			
+			
+			
 		}
 		
 	}
 	
-	//读取订单信息
-	private void readOrders(){
-		;
+	private void calculatePrice(Depth depth, Ticker ticker, BigDecimal buyPrice, BigDecimal sellPrice){
+		
+		BigDecimal lastPrice = ticker.getLastPrice();
+		BigDecimal buy1Price = depth.getBids().get(0).getPrice();	//	买一价
+		BigDecimal sell1Price = depth.getAsks().get(0).getPrice();	//	卖一价
+		
+		//总费率，基于买价 
+		// 总费率 = 一般费率 + 一般费率 * (卖出价 ÷ 买入价)
+		BigDecimal wholeFeeRate = feeRate.add(feeRate.multiply(sell1Price.divide(buy1Price, 6, RoundingMode.HALF_EVEN))); 
+		
+		//利润率，基于买价
+		BigDecimal profitMargin = sell1Price.subtract(buy1Price).divide(buy1Price, 6, RoundingMode.HALF_EVEN).subtract(wholeFeeRate);
+		
+		BigDecimal one = new BigDecimal("1");
+		BigDecimal two = new BigDecimal("2");
+		
+		//以买一价买，卖一价卖的利润率大于最小利润率，小于最大利润率
+		if(profitMargin.compareTo(minProfitMargin)>=0 && profitMargin.compareTo(maxProfitMargin)<=0){
+			buyPrice = buy1Price;	//直接以买一价作为买价，卖一价作为卖价
+			sellPrice = sell1Price;
+		//以买一价买，卖一价卖的利润率小于最小利润率，根据最小利润率和最新成交价调整买入卖出价格
+		}else if(profitMargin.compareTo(minProfitMargin)<0){
+			sellPrice = lastPrice.multiply(one).multiply((one).add(feeRate).add(minProfitMargin)).divide((two).add(minProfitMargin), 4, RoundingMode.HALF_UP);
+			buyPrice = lastPrice.multiply((two).subtract((two).multiply(feeRate)).divide((two).add(minProfitMargin), 4, RoundingMode.HALF_DOWN));
+		//以买一价买，卖一价卖的利润率大于最大利润率，根据最大利润率和最新成交价调整买入卖出价格
+		}else if(profitMargin.compareTo(maxProfitMargin)>0){
+			sellPrice = lastPrice.multiply(new BigDecimal("2")).multiply((new BigDecimal("1")).add(feeRate).add(maxProfitMargin)).divide((new BigDecimal("2")).add(maxProfitMargin), 4, RoundingMode.HALF_UP);
+			buyPrice = lastPrice.multiply((new BigDecimal("2")).subtract((new BigDecimal("2")).multiply(feeRate)).divide((new BigDecimal("2")).add(maxProfitMargin), 4, RoundingMode.HALF_DOWN));
+		}
+		logger.debug("买入价：" + buyPrice + "，卖出价：" + sellPrice);
 	}
 	
-	//写订单信息
-	private void writeOrders(){
-		;
+	//获取最靠近两个单子的金额
+	private void closestPrice(BigDecimal maxBuyPrice, BigDecimal minSellPrice){
+		
+		//求最大的买单价格
+		if(liveBuyOrders.size() == 0){
+			maxBuyPrice = minPrice;
+		}else{
+			Collections.sort(liveBuyOrders, new Comparator<Order>() {
+				public int compare(Order o1, Order o2) {
+					return o2.getPrice().compareTo(o1.getPrice());//从大到小排序
+				}
+			});
+			maxBuyPrice = liveBuyOrders.get(0).getPrice();
+		}
+		
+		//求最小的卖单价格
+		if(liveSellOrders.size() == 0){
+			minSellPrice = maxPrice;
+		}else{
+			Collections.sort(liveSellOrders, new Comparator<Order>() {
+				public int compare(Order o1, Order o2) {
+					return o1.getPrice().compareTo(o2.getPrice());//从小到大排序
+				}
+			});
+			minSellPrice = liveSellOrders.get(0).getPrice();
+		}
 	}
 	
+	//检查是否满足下单条件，即买单间隔与卖单间隔操作最小间隔
+	private Boolean isMeetOrderCondition(BigDecimal buyPrice, BigDecimal sellPrice, BigDecimal maxBuyPrice, BigDecimal minSellPrice){
+		Boolean meetBuyCondition = buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) > 0;
+		Boolean meetSellCondition = minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) > 0;
+		return meetBuyCondition && meetSellCondition;
+	}
 	
+	//更新已经下单的订单信息
+	private void updateLiveOrders(){
+		
+		Collections.sort(liveBuyOrders, new Comparator<Order>() {
+
+			public int compare(Order o1, Order o2) {
+				return o2.getPrice().compareTo(o1.getPrice());
+			}
+		});
+
+		for(int i=0; i<liveBuyOrders.size(); i++){
+			;
+		}
+		
+		Collections.sort(liveSellOrders, new Comparator<Order>() {
+
+			public int compare(Order o1, Order o2) {
+				return o1.getPrice().compareTo(o2.getPrice());
+			}
+		});
+		for(Order order : liveSellOrders){
+			
+		}
+		
+		
+	}
+	
+	private void delay(Long ms){
+		try {
+			Thread.sleep(ms);
+		} catch (InterruptedException e) {
+			logger.error(e);
+		}
+	}
 	
 	public String getPlantform() {
 		return plantform;
