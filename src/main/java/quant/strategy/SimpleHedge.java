@@ -11,6 +11,7 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 import org.hibernate.Query;
 import org.hibernate.Session;
+import org.hibernate.Transaction;
 
 import quant.dao.LiveOrderPairsHome;
 import quant.entity.LiveOrderPairs;
@@ -173,7 +174,79 @@ public class SimpleHedge {
 		
 	}
 	
-	//更新订单信息
+	public void earnMoney(){
+		//校验参数
+		if(!this.validateParameters()){
+			logger.fatal("参数校验失败！退出系统。");
+			System.exit(0);
+		}
+		//初始化对象
+		this.init();
+		
+		//同步订单信息
+		this.updateOrders();
+		
+		while(true){
+			delay(cycle);
+			Depth depth = trader.getDepth(currency);
+			//若获取深度信息失败，则暂停1分钟后再继续
+			if(depth == null){
+				delay(60000L);
+				continue;
+			}
+			
+			Ticker ticker = trader.getTicker(currency);
+			if(null == ticker){
+				delay(60000L);
+				continue;
+			}
+			
+			
+			// 计算买入价与卖出价
+			BigDecimal buyPrice = null;	//买入价
+			BigDecimal sellPrice = null; //卖出价			
+			this.calculatePrice(depth, ticker, buyPrice, sellPrice);
+			
+			// 计算最接近当前价格的订单价格
+			BigDecimal maxBuyPrice = null;
+			BigDecimal minSellPrice = null;
+			closestPrice(maxBuyPrice, minSellPrice);
+			
+			//不满足下单条件，更新订单信息，并跳过此轮
+			if(!isMeetOrderCondition(buyPrice, sellPrice, maxBuyPrice, minSellPrice)){
+				updateLiveOrders();
+				continue;
+			}
+			
+			//满足条件，下订单对（卖单与卖单），更新订单信息
+			Order buyOrder = trader.order("BUY", currency, quantity, buyPrice);
+			if(null == buyOrder){
+				delay(1000L);
+				continue;
+			}
+			
+			//买单下单成功
+			LiveOrderPairs orderPair = new LiveOrderPairs();
+			orderPair.setBuyOrderId(buyOrder.getOrderId());
+			orderPair.setBuyOrderPrice(buyPrice);
+			orderPair.setBuyOrderQuantity(quantity);
+			orderPair.setBuyOrderStatus(buyOrder.getStatus());
+			liveOrderPairsHome.persist(orderPair);
+			
+			Order sellOrder = trader.order("SELL", currency, quantity, sellPrice);
+			if(null == sellOrder){
+				;
+			}
+			
+			
+			
+		}
+		
+	}
+	
+	/**
+	 * 更新下单信息。
+	 */
 	@SuppressWarnings("unchecked")
 	private void updateOrders(){
 		Session session = HibernateUtil.getSession();
@@ -221,58 +294,13 @@ public class SimpleHedge {
 		}
 	}
 	
-	public void earnMoney(){
-		//校验参数
-		if(!this.validateParameters()){
-			logger.fatal("参数校验失败！退出系统。");
-			System.exit(0);
-		}
-		//初始化对象
-		this.init();
-		
-		//同步订单信息
-		this.updateOrders();
-		
-		while(true){
-			delay(cycle);
-			Depth depth = trader.getDepth(currency);
-			//若获取深度信息失败，则暂停1分钟后再继续
-			if(depth == null){
-				delay(60000L);
-				continue;
-			}
-			
-			Ticker ticker = trader.getTicker(currency);
-			if(null == ticker){
-				delay(60000L);
-				continue;
-			}
-			
-			
-			// 计算买入价与卖出价
-			BigDecimal buyPrice = null;	//买入价
-			BigDecimal sellPrice = null; //卖出价			
-			this.calculatePrice(depth, ticker, buyPrice, sellPrice);
-			
-			// 计算最接近当前价格的订单价格
-			BigDecimal maxBuyPrice = null;
-			BigDecimal minSellPrice = null;
-			closestPrice(maxBuyPrice, minSellPrice);
-			
-			//不满足下单条件，更新订单信息，并跳过此轮
-			if(!isMeetOrderCondition(buyPrice, sellPrice, maxBuyPrice, minSellPrice)){
-				
-				continue;
-			}
-			
-			//满足条件，下单，更新订单信息
-			
-			
-			
-		}
-		
-	}
-	
+	/**
+	 * 根据深度和行情信息为设计对冲交易对的价格。
+	 * @param depth 深度信息
+	 * @param ticker 行情信息
+	 * @param buyPrice 买单价格
+	 * @param sellPrice 卖单价格
+	 */
 	private void calculatePrice(Depth depth, Ticker ticker, BigDecimal buyPrice, BigDecimal sellPrice){
 		
 		BigDecimal lastPrice = ticker.getLastPrice();
@@ -340,33 +368,87 @@ public class SimpleHedge {
 		return meetBuyCondition && meetSellCondition;
 	}
 	
-	//更新已经下单的订单信息
-	private void updateLiveOrders(){
+	/**
+	 * 更新已经下单的订单信息, 若更新时出现异常情况，则返回 null
+	 * 
+	 * <p>对进行中的买单按照金额大小从大到小排序，逐个判断订单是否成交。
+	 * 若订单已经成交，则从进行中的订单列表中移除，同时更新数据库。
+	 * 
+	 * @return
+	 */
+	private Boolean updateLiveOrders(){
 		
 		Collections.sort(liveBuyOrders, new Comparator<Order>() {
-
 			public int compare(Order o1, Order o2) {
 				return o2.getPrice().compareTo(o1.getPrice());
 			}
 		});
 
-		for(int i=0; i<liveBuyOrders.size(); i++){
-			;
+		for(int i=0, k=0; i<liveBuyOrders.size() - k; i++){
+			Order order = trader.getOrder(liveBuyOrders.get(i).getCurrency(), liveBuyOrders.get(i).getOrderId());
+			if(order == null){
+				return false;
+			}
+			//订单已经成交
+			if(order.getStatus().equals("FILLED")){
+				liveBuyOrders.remove(i);
+				k++;
+				//更新数据库
+				Session session = HibernateUtil.getSession();
+				Transaction transaction = session.beginTransaction();
+				Query query = session.createQuery("from LiveOrderPairs where buyOrderId=:buyOrderId and currency=:currency");
+				query.setParameter("buyOrderId", order.getOrderId());
+				query.setParameter("currency", order.getCurrency());
+				LiveOrderPairs orderPairs = (LiveOrderPairs) query.list().get(0);
+				orderPairs.setBuyOrderPrice(order.getPrice());
+				orderPairs.setBuyOrderStatus(order.getStatus());
+				orderPairs.setBuyOrderQuantity(order.getQuantity());
+				session.persist(orderPairs);
+				transaction.commit();
+				session.close();
+			}else{//因为金额大的买单都没有成交，下面金额小的更不可能成交，所以直接跳出，不必再查看是否成交。
+				break;
+			}
 		}
 		
 		Collections.sort(liveSellOrders, new Comparator<Order>() {
-
 			public int compare(Order o1, Order o2) {
 				return o1.getPrice().compareTo(o2.getPrice());
 			}
 		});
-		for(Order order : liveSellOrders){
-			
+		for(int i=0, k=0; i<liveSellOrders.size() - k; i++){
+			Order order = trader.getOrder(liveBuyOrders.get(i).getCurrency(), liveBuyOrders.get(i).getOrderId());
+			if(null == order ){
+				return false;
+			}else{
+				if(order.getStatus().equals("FILLED")){
+					liveSellOrders.remove(i);
+					k++;
+					//更新数据库
+					Session session = HibernateUtil.getSession();
+					Transaction transaction = session.beginTransaction();
+					Query query = session.createQuery("from LiveOrderPairs where sellOrderId=:sellOrderId and currency=:currency");
+					query.setParameter("sellOrderId", order.getOrderId());
+					query.setParameter("currency", order.getCurrency());
+					LiveOrderPairs orderPairs = (LiveOrderPairs) query.list().get(0);
+					orderPairs.setSellOrderPrice(order.getPrice());
+					orderPairs.setSellOrderStatus(order.getStatus());
+					orderPairs.setSellOrderQuantity(order.getQuantity());
+					session.persist(orderPairs);
+					transaction.commit();
+					session.close();
+				}else{//金额小的卖单都没有成交，金额大的卖单更不可能成交
+					break;
+				}
+			}
 		}
-		
-		
+		return true;
 	}
 	
+	/**
+	 * 延时函数
+	 * @param ms 延时时间（单位：毫秒）
+	 */
 	private void delay(Long ms){
 		try {
 			Thread.sleep(ms);
