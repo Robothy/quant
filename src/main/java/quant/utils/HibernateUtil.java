@@ -4,7 +4,6 @@ import org.hibernate.Session;
 import org.hibernate.SessionFactory;
 import org.hibernate.boot.registry.StandardServiceRegistry;
 import org.hibernate.boot.registry.StandardServiceRegistryBuilder;
-import org.hibernate.metamodel.MetadataSources;
 
 /**
  * @author robothy
@@ -15,7 +14,7 @@ public class HibernateUtil {
 			.configure().build();
 	private static SessionFactory FACTORY = null;
     static{
-    	FACTORY = new MetadataSources(REGISTRY).buildMetadata().buildSessionFactory();
+    	FACTORY = new org.hibernate.boot.MetadataSources(REGISTRY).buildMetadata().buildSessionFactory();
     }
     
     public static Session getSession(){
