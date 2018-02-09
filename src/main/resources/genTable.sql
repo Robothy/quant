@@ -1,5 +1,5 @@
 create table LIVE_ORDER_PAIRS(
-	DATA_ID int not null identity(1,1) primary key,
+	DATA_ID char(32) primary key,
 	PLANTFORM varchar(30),
 	CURRENCY varchar(15),
 	BUY_ORDER_ID varchar(32),
