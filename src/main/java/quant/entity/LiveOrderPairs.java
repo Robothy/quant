@@ -1,7 +1,9 @@
 package quant.entity;
-// Generated 2018-2-9 22:27:23 by Hibernate Tools 4.3.1.Final
+// Generated 2018-2-9 23:03:28 by Hibernate Tools 4.3.1.Final
 
 import java.math.BigDecimal;
+
+import javax.annotation.Generated;
 import javax.persistence.Column;
 import javax.persistence.Entity;
 import javax.persistence.GeneratedValue;
@@ -17,6 +19,10 @@ import org.hibernate.annotations.GenericGenerator;
 @Table(name = "LIVE_ORDER_PAIRS", schema = "dbo", catalog = "quant")
 public class LiveOrderPairs implements java.io.Serializable {
 
+	/**
+	 * 
+	 */
+	private static final long serialVersionUID = 1L;
 	private String dataId;
 	private String plantform;
 	private String currency;
@@ -57,8 +63,8 @@ public class LiveOrderPairs implements java.io.Serializable {
 	}
 
 	@Id
-	@GenericGenerator(name="generator", strategy="uuid")
-	@GeneratedValue(generator="generator")
+	@GenericGenerator(name="uuid", strategy="uuid")
+	@GeneratedValue(generator="uuid")
 	@Column(name = "DATA_ID", unique = true, nullable = false, length = 32)
 	public String getDataId() {
 		return this.dataId;
