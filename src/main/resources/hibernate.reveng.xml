@@ -5,4 +5,7 @@
 	<table-filter match-catalog="quant" match-schema="dbo"
 		match-name=".*">
 	</table-filter>
+	<table-filter match-name="LIVE_ORDER_PAIRS" match-catalog="quant"
+		match-schema="dbo" exclude="true">
+	</table-filter>
 </hibernate-reverse-engineering>
