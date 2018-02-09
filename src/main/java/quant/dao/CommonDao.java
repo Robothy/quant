@@ -20,4 +20,7 @@ public class CommonDao {
 	public List<Object> findByHql(String hql){
 		return findByHql(hql, null);
 	}
+	
+	
+	
 }
