@@ -1,4 +1,4 @@
-create table LIVE_ORDER_PAIRS(
+create table LIVE_ORDER_PAIR(
 	DATA_ID char(32) primary key,
 	PLANTFORM varchar(30),
 	CURRENCY varchar(15),

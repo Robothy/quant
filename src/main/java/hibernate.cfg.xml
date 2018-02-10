@@ -13,6 +13,6 @@
         <property name="hibernate.search.autoregister_listeners">false</property>
         <property name="hibernate.show_sql">false</property>
         <property name="hibernate.validator.apply_to_ddl">false</property>
-        <mapping class="quant.entity.LiveOrderPairs" />
+        <mapping class="quant.entity.LiveOrderPair" />
     </session-factory>
 </hibernate-configuration>
