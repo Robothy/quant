@@ -9,16 +9,15 @@ import java.util.List;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.hibernate.Query;
 import org.hibernate.Session;
 import org.hibernate.Transaction;
-import org.hibernate.query.criteria.internal.expression.SearchedCaseExpression;
+import org.hibernate.query.Query;
 
-import quant.dao.LiveOrderPairsHome;
-import quant.entity.LiveOrderPairs;
+import quant.entity.LiveOrderPair;
 import quant.utils.HibernateUtil;
 import traderobot.metaobjects.Depth;
 import traderobot.metaobjects.Order;
+import traderobot.metaobjects.OrderStatus;
 import traderobot.metaobjects.Ticker;
 import traderobot.trade.Tradable;
 import traderobot.trade.TraderFactory;
@@ -62,17 +61,22 @@ public class SimpleHedge {
 	//操作周期, 默认10毫秒
 	private Long cycle = 10L;
 	
-	private List<LiveOrderPairs> liveOrderPairs = null;
-
-	private List<Order> liveSellOrders = null;
+	private List<LiveOrderPair> liveSellOrderPairs = null;
 	
-	private List<Order> liveBuyOrders = null;
+	private List<LiveOrderPair> liveBuyOrderPairs = null;
 	
-	private List<LiveOrderPairs> planSellOrderPairs = null;
+	private List<LiveOrderPair> planSellOrderPairs = null;
 	
-	private List<LiveOrderPairs> planBuyOrderPairs = null;
+	private List<LiveOrderPair> planBuyOrderPairs = null;
 	
-	private LiveOrderPairsHome liveOrderPairsHome = null;
+	//排序规则
+	private Comparator<LiveOrderPair> orderByBuyPriceAsc = null;
+	
+	private Comparator<LiveOrderPair> orderByBuyPriceDesc = null;
+	
+	private Comparator<LiveOrderPair> orderBySellPriceAsc = null;
+	
+	private Comparator<LiveOrderPair> orderBySellPriceDesc = null;
 	
 	private BigDecimal kM = null;
 	
@@ -81,7 +85,7 @@ public class SimpleHedge {
 	BigDecimal ONE = new BigDecimal("1");
 	
 	/**
-	 * 验证参数的合理性
+	 * 验证参数的合理性，验证失败时打印验证错误原因，并退出系统，减少不必要的损失。
 	 */
 	private Boolean validateParameters(){
 		
@@ -166,38 +170,70 @@ public class SimpleHedge {
 		return result;
 	}
 	
-	//初始化相关变量
+	/**
+	 * 初始化相关变量，包括实例化一些对象，计算参数值。
+	 */
 	private void init(){
 		if(null == trader){
 			trader = TraderFactory.newInstance(plantform);
 		}
 		
-		if(null == liveOrderPairsHome){
-			liveOrderPairsHome = new LiveOrderPairsHome();
+		if(null == liveSellOrderPairs){
+			liveSellOrderPairs = new ArrayList<LiveOrderPair>();
 		}
 		
-		if(null == liveSellOrders){
-			liveSellOrders = new ArrayList<Order>();
-		}
-		
-		if(null == liveBuyOrders){
-			liveBuyOrders = new ArrayList<Order>();
+		if(null == liveBuyOrderPairs){
+			liveBuyOrderPairs = new ArrayList<LiveOrderPair>();
 		}
 		
 		if(null == planBuyOrderPairs){
-			planBuyOrderPairs = new ArrayList<LiveOrderPairs>();
+			planBuyOrderPairs = new ArrayList<LiveOrderPair>();
 		}
 		
 		if(null == planSellOrderPairs){
-			planSellOrderPairs = new ArrayList<LiveOrderPairs>();
+			planSellOrderPairs = new ArrayList<LiveOrderPair>();
 		}
 		
-		kM = new BigDecimal(StrictMath.sqrt(maxProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
+		if(null == kM){
+			BigDecimal wholeMaxProfitMargin = maxProfitMargin.add(feeRate).add(feeRate.multiply(ONE.add(feeRate))); 
+			kM = new BigDecimal(StrictMath.sqrt(wholeMaxProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
+		}
 		
-		kN = new BigDecimal(StrictMath.sqrt(minProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
+		if(null == kN){
+			BigDecimal wholeMinProfitMargin = minProfitMargin.add(feeRate).add(feeRate.multiply(ONE.add(feeRate)));
+			kN = new BigDecimal(StrictMath.sqrt(wholeMinProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
+		}
+		
+		orderByBuyPriceAsc = new Comparator<LiveOrderPair>() {
+			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
+				return o1.getBuyOrderPrice().compareTo(o2.getBuyOrderPrice());
+			}
+		};
+		
+		orderByBuyPriceDesc = new Comparator<LiveOrderPair>() {
+			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
+				return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());
+			}
+		};
+		
+		orderBySellPriceAsc = new Comparator<LiveOrderPair>() {
+			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
+				return o1.getBuyOrderPrice().compareTo(o2.getBuyOrderPrice());
+			}
+		};
+		
+		orderBySellPriceDesc = new Comparator<LiveOrderPair>() {
+			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
+				return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());
+			}
+		};
+		
 		
 	}
 	
+	/**
+	 * 交易入口，调用此方法之后系统将按照策略持续下单，更新订单信息。
+	 */
 	public void earnMoney(){
 
 		//初始化对象
@@ -255,9 +291,15 @@ public class SimpleHedge {
 				continue;
 			}
 			
+			/**
+			 * 如果买单下单失败，则直接跳过此轮；
+			 * 如果买单下单成功，卖单下单成功，则订单对同时加入到进行中的买单和卖单列表；
+			 * 如果买单下单成功，卖单下单失败，则订单对加入到进行中的买单列表和计划中的卖单列表
+			 */
+			
 			//买单下单成功
-			liveBuyOrders.add(buyOrder);
-			LiveOrderPairs orderPair = new LiveOrderPairs();
+			LiveOrderPair orderPair = new LiveOrderPair();
+			liveBuyOrderPairs.add(orderPair);
 			orderPair.setCurrency(currency);
 			orderPair.setPlantform(plantform);
 			orderPair.setCreateTimestamp(System.currentTimeMillis());
@@ -278,7 +320,7 @@ public class SimpleHedge {
 				orderPair.setSellOrderStatus("PLAN");
 				planSellOrderPairs.add(orderPair);
 			}else{
-				liveSellOrders.add(sellOrder);
+				liveSellOrderPairs.add(orderPair);
 				orderPair.setSellOrderId(sellOrder.getOrderId());
 				orderPair.setSellOrderStatus(sellOrder.getStatus());
 			}
@@ -296,53 +338,83 @@ public class SimpleHedge {
 	
 	
 	/**
-	 * 更新下单信息。
+	 * 同步订单信息。
+	 * 
+	 * <p>在策略初始启动的时候执行，执行之后内存中各对象的状态如下：
+	 * <ul>
+	 * <li> 进行中的买单列表 liveBuyOrderPairs 中仅包含进行中的买单
+	 * <li> 进行中的卖单列表 liveSellOrderPairs 中仅包含进行中的卖单
+	 * <li> 计划买单交易对列表 planBuyOrderPairs 中仅包含买单状态为 PLAN 的交易对，卖单状态不限
+	 * <li> 计划卖单交易对列表 planSellOrderPairs 中仅包含卖单状态为 PLAN 的交易对，买单状态不限
+	 * 
 	 */
-	@SuppressWarnings("unchecked")
 	private void updateOrders(){
 		Session session = HibernateUtil.getSession();
 		
 		//检索没有完全完成的对冲交易对
-		String hql = "from LiveOrderPairs where currency=:currency and (buyOrderStatus!='FILLED' or sellOrderStatus!='FILLED')";
-		Query query = session.createQuery(hql);
-		query.setString("currency", currency);
-		List <LiveOrderPairs> persistedOrderPairs = query.list();
-		for(LiveOrderPairs orderPairs : persistedOrderPairs){
+		String hql = "from LiveOrderPair where currency=:currency and (buyOrderStatus!='FILLED' or sellOrderStatus!='FILLED')";
+		Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
+		query.setParameter("currency", currency);
+		List <LiveOrderPair> persistedOrderPairs = query.getResultList();
+		for(LiveOrderPair orderPair : persistedOrderPairs){
 			Boolean buyOrderChanged = false; 
 			Boolean sellOrderChanged = false;
 			//若买入交易对没有完成，且买入交易并非计划交易
-			String buyOrderStatus = orderPairs.getBuyOrderStatus();
+			String buyOrderStatus = orderPair.getBuyOrderStatus();
 			if(!"FILLED".equals(buyOrderStatus) && !"PLAN".equals(buyOrderStatus)){
-				Order order = trader.getOrder(currency, orderPairs.getBuyOrderId());
-				orderPairs.setBuyOrderPrice(order.getPrice());
-				orderPairs.setBuyOrderStatus(order.getStatus());
-				liveBuyOrders.add(order);
-				buyOrderChanged = true;
+				Order order = trader.getOrder(currency, orderPair.getBuyOrderId());
+				String currentStatus = buyOrderStatus;//数据库中当前状态
+				String latestStatus = order.getStatus();//服务器中最新状态
+				//数据库中订单的当前状态与服务器中的状态一致，证明没有发生改变
+				if(currentStatus.equals(latestStatus)){
+					buyOrderChanged = false;
+				}else{
+					orderPair.setBuyOrderPrice(order.getPrice());
+					orderPair.setBuyOrderStatus(order.getStatus());
+					buyOrderChanged = true;					
+				}
+				//订单状态没有完成，则将其加入到[进行中的卖单列表 liveBuyOrders 中]
+				if(!OrderStatus.FILLED.equals(latestStatus)){
+					liveBuyOrderPairs.add(orderPair);						
+				}
 			}
 			
-			String sellOrderStatus = orderPairs.getSellOrderStatus();
+			String sellOrderStatus = orderPair.getSellOrderStatus();
 			if(!"FILLED".equals(sellOrderStatus) && !"PLAN".equals(sellOrderStatus)){
-				Order order = trader.getOrder(currency, orderPairs.getSellOrderId());
-				orderPairs.setSellOrderPrice(order.getPrice());
-				orderPairs.setSellOrderStatus(order.getStatus());
-				liveSellOrders.add(order);
-				sellOrderChanged = true;
+				Order order = trader.getOrder(currency, orderPair.getSellOrderId());
+				String currentStatus = sellOrderStatus;
+				String latestStatus = order.getStatus();
+				if(currentStatus.equals(latestStatus)){
+					sellOrderChanged = false;
+				}else{
+					orderPair.setSellOrderPrice(order.getPrice());
+					orderPair.setSellOrderStatus(order.getStatus());
+					sellOrderChanged = true;
+				}
+				
+				//卖单没有完成，则将其加入到 liveSellOrders 对象中
+				if(!OrderStatus.FILLED.equals(order.getStatus())){
+					liveSellOrderPairs.add(orderPair);
+				}
 			}
 			
 			//将计划下的订单对中包含买单的交易对放入到 planBuyOrderPairs 中
 			if("PLAN".equals(buyOrderStatus)){
-				planBuyOrderPairs.add(orderPairs);
+				planBuyOrderPairs.add(orderPair);
 			}
 			
 			if("PLAN".equals(sellOrderStatus)){
-				planSellOrderPairs.add(orderPairs);
+				planSellOrderPairs.add(orderPair);
 			}
 			
 			//订单发生变化，更新数据库订单的状态
-			if (buyOrderChanged && sellOrderChanged){
-				liveOrderPairsHome.merge(orderPairs);
+			if (buyOrderChanged || sellOrderChanged){
+				session.beginTransaction();
+				session.merge(orderPair);
+				session.getTransaction().commit();
 			}
 		}
+		session.close();
 	}
 	
 	/**
@@ -381,10 +453,6 @@ public class SimpleHedge {
 			_buyPrice = lastPrice.divide(kM, pricePrecision, RoundingMode.HALF_DOWN);
 			_sellPrice = lastPrice.multiply(kM).divide(ONE, pricePrecision, RoundingMode.HALF_DOWN);
 		}
-		//buyPrice.valueOf(_buyPrice.doubleValue());
-		//sellPrice.valueOf(_sellPrice.doubleValue());
-		//buyPrice.subtract(buyPrice).add(_buyPrice);
-		//sellPrice.subtract(sellPrice).add(_sellPrice);
 		pricePair.setBuyPrcie(_buyPrice);
 		pricePair.setSellPrice(_sellPrice);
 		logger.debug("买入价：" + _buyPrice + "，卖出价：" + _sellPrice);
@@ -397,27 +465,23 @@ public class SimpleHedge {
 		BigDecimal _minSellPrice = new BigDecimal(-1);
 		
 		//求最大的买单价格
-		if(liveBuyOrders.size() == 0){
+		if(liveBuyOrderPairs.size() == 0){
 			_maxBuyPrice = minPrice;
 		}else{
-			Collections.sort(liveBuyOrders, new Comparator<Order>() {
-				public int compare(Order o1, Order o2) {
-					return o2.getPrice().compareTo(o1.getPrice());//从大到小排序
+			Collections.sort(liveBuyOrderPairs, new Comparator<LiveOrderPair>() {
+				public int compare(LiveOrderPair o1, LiveOrderPair o2) {
+					return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());//从大到小排序
 				}
 			});
-			_maxBuyPrice = liveBuyOrders.get(0).getPrice();
+			_maxBuyPrice = liveBuyOrderPairs.get(0).getBuyOrderPrice();
 		}
 		
 		//求最小的卖单价格
-		if(liveSellOrders.size() == 0){
+		if(liveSellOrderPairs.size() == 0){
 			_minSellPrice = maxPrice;
 		}else{
-			Collections.sort(liveSellOrders, new Comparator<Order>() {
-				public int compare(Order o1, Order o2) {
-					return o1.getPrice().compareTo(o2.getPrice());//从小到大排序
-				}
-			});
-			_minSellPrice = liveSellOrders.get(0).getPrice();
+			Collections.sort(liveSellOrderPairs, orderBySellPriceAsc);
+			_minSellPrice = liveSellOrderPairs.get(0).getSellOrderPrice();
 		}
 		pricePair.setBuyPrcie(_maxBuyPrice);
 		pricePair.setSellPrice(_minSellPrice);
@@ -425,43 +489,43 @@ public class SimpleHedge {
 	
 	//检查是否满足下单条件，即买单间隔与卖单间隔操作最小间隔
 	private Boolean isMeetOrderCondition(BigDecimal buyPrice, BigDecimal sellPrice, BigDecimal maxBuyPrice, BigDecimal minSellPrice){
-		Boolean meetBuyCondition = buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) > 0;
-		Boolean meetSellCondition = minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) > 0;
+		Boolean meetBuyCondition = buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
+		Boolean meetSellCondition = minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
 		return meetBuyCondition && meetSellCondition;
 	}
 	
 	/**
-	 * 更新已经下单的订单信息, 若更新时出现异常情况，则返回 null
 	 * 
-	 * <p>对进行中的买单按照金额大小从大到小排序，逐个判断订单是否成交。
+	 * <P> 每轮都执行此方法，用于实时同步订单信息。
+	 * 
+	 * <P> 更新已经下单的订单信息, 若更新时出现异常情况，则返回 null
+	 * 
+	 * <p> 对进行中的买单按照金额大小从大到小排序，逐个判断订单是否成交。
 	 * 若订单已经成交，则从进行中的订单列表中移除，同时更新数据库。
 	 * 
 	 * @return
 	 */
 	private Boolean updateLiveOrders(){
 		
-		Collections.sort(liveBuyOrders, new Comparator<Order>() {
-			public int compare(Order o1, Order o2) {
-				return o2.getPrice().compareTo(o1.getPrice());
-			}
-		});
+		Collections.sort(liveBuyOrderPairs, orderByBuyPriceDesc);
 
-		for(int i=0, k=0; i<liveBuyOrders.size() - k; i++){
-			Order order = trader.getOrder(liveBuyOrders.get(i).getCurrency(), liveBuyOrders.get(i).getOrderId());
+		for(int i=0, k=0; i<liveBuyOrderPairs.size() - k; i++){
+			Order order = trader.getOrder(liveBuyOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
 			if(order == null){
 				return false;
 			}
 			//订单已经成交
 			if(order.getStatus().equals("FILLED")){
-				liveBuyOrders.remove(i);
+				liveBuyOrderPairs.remove(i);
 				k++;
 				//更新数据库
 				Session session = HibernateUtil.getSession();
 				Transaction transaction = session.beginTransaction();
-				Query query = session.createQuery("from LiveOrderPairs where buyOrderId=:buyOrderId and currency=:currency");
+				String hql = "from LiveOrderPair where buyOrderId=:buyOrderId and currency=:currency";
+				Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
 				query.setParameter("buyOrderId", order.getOrderId());
 				query.setParameter("currency", order.getCurrency());
-				LiveOrderPairs orderPairs = (LiveOrderPairs) query.list().get(0);
+				LiveOrderPair orderPairs = query.getResultList().get(0);
 				orderPairs.setBuyOrderPrice(order.getPrice());
 				orderPairs.setBuyOrderStatus(order.getStatus());
 				orderPairs.setBuyOrderQuantity(order.getQuantity());
@@ -473,26 +537,23 @@ public class SimpleHedge {
 			}
 		}
 		
-		Collections.sort(liveSellOrders, new Comparator<Order>() {
-			public int compare(Order o1, Order o2) {
-				return o1.getPrice().compareTo(o2.getPrice());
-			}
-		});
-		for(int i=0, k=0; i<liveSellOrders.size() - k; i++){
-			Order order = trader.getOrder(liveBuyOrders.get(i).getCurrency(), liveBuyOrders.get(i).getOrderId());
+		Collections.sort(liveSellOrderPairs, orderBySellPriceAsc);
+		for(int i=0, k=0; i<liveSellOrderPairs.size() - k; i++){
+			Order order = trader.getOrder(liveSellOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
 			if(null == order ){
 				return false;
 			}else{
 				if(order.getStatus().equals("FILLED")){
-					liveSellOrders.remove(i);
+					liveSellOrderPairs.remove(i);
 					k++;
 					//更新数据库
 					Session session = HibernateUtil.getSession();
 					Transaction transaction = session.beginTransaction();
-					Query query = session.createQuery("from LiveOrderPairs where sellOrderId=:sellOrderId and currency=:currency");
+					String hql = "from LiveOrderPair where sellOrderId=:sellOrderId and currency=:currency";
+					Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
 					query.setParameter("sellOrderId", order.getOrderId());
 					query.setParameter("currency", order.getCurrency());
-					LiveOrderPairs orderPairs = (LiveOrderPairs) query.list().get(0);
+					LiveOrderPair orderPairs = query.getResultList().get(0);
 					orderPairs.setSellOrderPrice(order.getPrice());
 					orderPairs.setSellOrderStatus(order.getStatus());
 					orderPairs.setSellOrderQuantity(order.getQuantity());
@@ -634,11 +695,6 @@ public class SimpleHedge {
 		private BigDecimal buyPrcie = null;
 		
 		private BigDecimal sellPrice = null;
-		
-		public PricePair(BigDecimal buyPrice, BigDecimal sellPrice){
-			buyPrice = buyPrice;
-			sellPrice = sellPrice;
-		}
 		
 		public PricePair(){}
 		
