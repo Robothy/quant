@@ -250,7 +250,7 @@ public class SimpleHedge {
 	 * <li> 计划卖单交易对列表 planSellOrderPairs 中仅包含卖单状态为 PLAN 的交易对，买单状态不限
 	 * 
 	 */
-	private void updateOrders(){
+	private Boolean updateOrders(){
 		Session session = HibernateUtil.getSession();
 		
 		//检索没有完全完成的对冲交易对
@@ -265,6 +265,9 @@ public class SimpleHedge {
 			String buyOrderStatus = orderPair.getBuyOrderStatus();
 			if(!"FILLED".equals(buyOrderStatus) && !"PLAN".equals(buyOrderStatus)){
 				Order order = trader.getOrder(currency, orderPair.getBuyOrderId());
+				if(null == order){
+					return false;
+				}
 				String currentStatus = buyOrderStatus;//数据库中当前状态
 				String latestStatus = order.getStatus();//服务器中最新状态
 				//数据库中订单的当前状态与服务器中的状态一致，证明没有发生改变
@@ -273,6 +276,7 @@ public class SimpleHedge {
 				}else{
 					orderPair.setBuyOrderPrice(order.getPrice());
 					orderPair.setBuyOrderStatus(order.getStatus());
+					logger.info("订单编号为[" + orderPair.getBuyOrderId() + "]的买单状态由" + currentStatus + "变为" + latestStatus );
 					buyOrderChanged = true;					
 				}
 				//订单状态没有完成，则将其加入到[进行中的卖单列表 liveBuyOrders 中]
@@ -284,6 +288,9 @@ public class SimpleHedge {
 			String sellOrderStatus = orderPair.getSellOrderStatus();
 			if(!"FILLED".equals(sellOrderStatus) && !"PLAN".equals(sellOrderStatus)){
 				Order order = trader.getOrder(currency, orderPair.getSellOrderId());
+				if(null == order){
+					return false;
+				}
 				String currentStatus = sellOrderStatus;
 				String latestStatus = order.getStatus();
 				if(currentStatus.equals(latestStatus)){
@@ -291,6 +298,7 @@ public class SimpleHedge {
 				}else{
 					orderPair.setSellOrderPrice(order.getPrice());
 					orderPair.setSellOrderStatus(order.getStatus());
+					logger.info("订单编号为[" + orderPair.getBuyOrderId() + "]的买单状态由" + currentStatus + "变为" + latestStatus );
 					sellOrderChanged = true;
 				}
 				
@@ -317,6 +325,12 @@ public class SimpleHedge {
 			}
 		}
 		session.close();
+		logger.info("订单初始化同步完成！");
+		logger.info("进行中买单数：" + liveBuyOrderPairs.size());
+		logger.info("进行中卖单数：" + liveSellOrderPairs.size());
+		logger.info("计划中买单数：" + planBuyOrderPairs.size());
+		logger.info("计划中卖单数：" + planSellOrderPairs.size());
+		return true;
 	}
 	
 	/**
@@ -357,7 +371,6 @@ public class SimpleHedge {
 		}
 		pricePair.setBuyPrcie(_buyPrice);
 		pricePair.setSellPrice(_sellPrice);
-		logger.debug("买入价：" + _buyPrice + "，卖出价：" + _sellPrice);
 	}
 	
 	//获取最靠近两个单子的金额
@@ -423,6 +436,7 @@ public class SimpleHedge {
 		for(int i=0, k=0; i<primitiveBuyOrderSize - k; i++){
 			Order order = trader.getOrder(liveBuyOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
 			if(order == null){
+				logger.error("获取买单" + liveBuyOrderPairs.get(i).getBuyOrderId() + "失败！");
 				return false;
 			}
 			LiveOrderPair orderPairs = liveBuyOrderPairs.get(i);
@@ -441,13 +455,14 @@ public class SimpleHedge {
 			}//因为金额大的买单都没有成交，下面金额小的更不可能成交，所以直接跳出，不必再查看是否成交。
 			
 			if(isStatusChanged == true){
+				logger.info("订单编号为[" + orderPairs.getBuyOrderId() + "]的买单状态变为" + orderPairs.getBuyOrderStatus());
 				liveBuyOrderPairs.remove(i);
 				k++;
 				i--;
 				//更新数据库
 				Session session = HibernateUtil.getSession();
 				Transaction transaction = session.beginTransaction();
-				session.persist(orderPairs);
+				session.merge(orderPairs);
 				
 				transaction.commit();
 				session.close();
@@ -463,6 +478,7 @@ public class SimpleHedge {
 			LiveOrderPair orderPair = liveSellOrderPairs.get(i);
 			Boolean isStatusChanged = false;
 			if(null == order ){
+				logger.error("获取卖单" + liveSellOrderPairs.get(i).getSellOrderId() + "失败！");
 				return false;
 			}else{
 				if(order.getStatus().equals(OrderStatus.FILLED)){
@@ -479,12 +495,13 @@ public class SimpleHedge {
 			}
 			
 			if(isStatusChanged){
+				logger.info("订单编号为[" + orderPair.getSellOrderId() + "]的买单状态变为" + orderPair.getSellOrderStatus());
 				k++;
 				i--;
 				//更新数据库
 				Session session = HibernateUtil.getSession();
 				Transaction transaction = session.beginTransaction();
-				session.persist(orderPair);
+				session.merge(orderPair);
 				transaction.commit();
 				session.close();
 			}else{//金额小的卖单状态没有改变，金额大的卖单更不可能成交
@@ -503,6 +520,7 @@ public class SimpleHedge {
 		try {
 			Thread.sleep(ms);
 		} catch (InterruptedException e) {
+			e.printStackTrace();
 			logger.error(e);
 		}
 	}
@@ -671,20 +689,31 @@ public class SimpleHedge {
 		while(true){
 			
 			delay(cycle);
-			
+			logger.debug("新一轮");
 			//更新挂单信息
-			updateLiveOrders();
+			if(!updateLiveOrders()){
+				logger.error("更新进行中的订单信息失败！");
+				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
+				delay(failedSleepTime);
+				logger.info("系统即将重试！");
+				continue;
+			}
 			
 			Depth depth = trader.getDepth(currency);
 			//若获取深度信息失败，则暂停一段时间后再继续
 			if(depth == null){
+				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
 				delay(failedSleepTime);
+				logger.info("系统即将重试！");
 				continue;
 			}
 			
 			Ticker ticker = trader.getTicker(currency);
 			if(null == ticker){
-				delay(60000L);
+				logger.info("获取" + currency + "的行情信息失败！");
+				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
+				delay(failedSleepTime);
+				logger.info("系统即将重试！");
 				continue;
 			}
 			
@@ -778,8 +807,8 @@ public class SimpleHedge {
 				Order buyOrder = trader.order("BUY", currency, quantity, buyPrice);
 				if(null == buyOrder){
 					logger.debug("买单下单失败，跳过此轮下单。");
-					delay(1000L);
 					isBuy = false;
+					continue;
 				}else{
 					//买单下单成功
 					liveBuyOrderPairs.add(orderPair);
@@ -835,12 +864,12 @@ public class SimpleHedge {
 		hedge
 		.setFeeRate(new BigDecimal("0.002"))
 		.setCurrency("HSR_QC")
-		.setCycle(100L)
-		.setIntervalRate(new BigDecimal("0.03"))
+		.setCycle(200L)
+		.setIntervalRate(new BigDecimal("0.02"))
 		.setMaxPrice(new BigDecimal("150"))
 		.setMinPrice(new BigDecimal("0.45"))
 		.setMaxProfitMargin(new BigDecimal("0.05"))
-		.setMinProfitMargin(new BigDecimal("0.01"))
+		.setMinProfitMargin(new BigDecimal("0.005"))
 		.setPlantform("zb.com")
 		.setQuantity(new BigDecimal("0.01"))
 		.setPricePrecision(2);
