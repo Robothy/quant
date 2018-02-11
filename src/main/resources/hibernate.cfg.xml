@@ -12,7 +12,7 @@
     <property name="show_sql">false</property>
     
     <property name="hibernate.dialect">org.hibernate.dialect.SQLServer2012Dialect</property>
-    <mapping class="quant.entity.LiveOrderPairs" />    
+    <mapping class="quant.entity.LiveOrderPair" />    
     
   </session-factory>
 </hibernate-configuration>
