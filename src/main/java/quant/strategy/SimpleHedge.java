@@ -17,6 +17,7 @@ import quant.entity.LiveOrderPair;
 import quant.utils.HibernateUtil;
 import traderobot.metaobjects.Depth;
 import traderobot.metaobjects.Order;
+import traderobot.metaobjects.OrderSide;
 import traderobot.metaobjects.OrderStatus;
 import traderobot.metaobjects.Ticker;
 import traderobot.trade.Tradable;
@@ -30,6 +31,9 @@ public class SimpleHedge {
 	private String plantform = null;
 	
 	private Tradable trader = null;
+	
+	//API操作失败休息时间， （单位：毫秒），默认 1000ms
+	private Long failedSleepTime = 1000L;
 	
 	//最高操作价格
 	private BigDecimal maxPrice = null;
@@ -231,109 +235,7 @@ public class SimpleHedge {
 		
 	}
 	
-	/**
-	 * 交易入口，调用此方法之后系统将按照策略持续下单，更新订单信息。
-	 */
-	public void earnMoney(){
-
-		//初始化对象
-		this.init();
-		
-		//校验参数
-		if(!this.validateParameters()){
-			logger.fatal("参数校验失败！退出系统。");
-			System.exit(0);
-		}
-		//同步订单信息
-		this.updateOrders();
-		
-		while(true){
-			delay(cycle);
-			Depth depth = trader.getDepth(currency);
-			//若获取深度信息失败，则暂停1分钟后再继续
-			if(depth == null){
-				delay(60000L);
-				continue;
-			}
-			
-			Ticker ticker = trader.getTicker(currency);
-			if(null == ticker){
-				delay(60000L);
-				continue;
-			}
-			
-			PricePair pricePair = new PricePair();
-			
-			// 计算买入价与卖出价
-			BigDecimal buyPrice = null;	//买入价
-			BigDecimal sellPrice = null;//卖出价
-			this.calculatePrice(depth, ticker, pricePair);
-			buyPrice = pricePair.getBuyPrcie();
-			sellPrice = pricePair.getSellPrice();
-			
-			// 计算最接近当前价格的订单价格
-			BigDecimal maxBuyPrice = null;
-			BigDecimal minSellPrice = null;
-			closestPrice(pricePair);
-			maxBuyPrice = pricePair.getBuyPrcie();
-			minSellPrice = pricePair.getSellPrice();
-			
-			//不满足下单条件，更新订单信息，并跳过此轮
-			if(!isMeetOrderCondition(buyPrice, sellPrice, maxBuyPrice, minSellPrice)){
-				updateLiveOrders();
-				continue;
-			}
-			
-			//满足条件，下订单对（卖单与卖单），更新订单信息
-			Order buyOrder = trader.order("BUY", currency, quantity, buyPrice);
-			if(null == buyOrder){
-				delay(1000L);
-				continue;
-			}
-			
-			/**
-			 * 如果买单下单失败，则直接跳过此轮；
-			 * 如果买单下单成功，卖单下单成功，则订单对同时加入到进行中的买单和卖单列表；
-			 * 如果买单下单成功，卖单下单失败，则订单对加入到进行中的买单列表和计划中的卖单列表
-			 */
-			
-			//买单下单成功
-			LiveOrderPair orderPair = new LiveOrderPair();
-			liveBuyOrderPairs.add(orderPair);
-			orderPair.setCurrency(currency);
-			orderPair.setPlantform(plantform);
-			orderPair.setCreateTimestamp(System.currentTimeMillis());
-			orderPair.setModifyTimestamp(System.currentTimeMillis());
-			
-			orderPair.setBuyOrderStatus(buyOrder.getStatus());
-			orderPair.setBuyOrderId(buyOrder.getOrderId());
-			orderPair.setBuyOrderPrice(buyPrice);
-			orderPair.setBuyOrderQuantity(quantity);
-			orderPair.setBuyOrderStatus(buyOrder.getStatus());
-			
-			
-			Order sellOrder = trader.order("SELL", currency, quantity, sellPrice);
-			orderPair.setSellOrderPrice(sellPrice);
-			orderPair.setSellOrderQuantity(quantity);
-			//卖单若下单成功，则更新订单编号和状态，否则将订单设置为计划订单
-			if(null == sellOrder){
-				orderPair.setSellOrderStatus("PLAN");
-				planSellOrderPairs.add(orderPair);
-			}else{
-				liveSellOrderPairs.add(orderPair);
-				orderPair.setSellOrderId(sellOrder.getOrderId());
-				orderPair.setSellOrderStatus(sellOrder.getStatus());
-			}
-			
-			//保存到数据库
-			Session session = HibernateUtil.getSession();
-			Transaction tx = session.beginTransaction();
-			session.save(orderPair);
-			tx.commit();
-			session.close();
-		}
-		
-	}
+	
 	
 	
 	
@@ -489,10 +391,19 @@ public class SimpleHedge {
 	
 	//检查是否满足下单条件，即买单间隔与卖单间隔操作最小间隔
 	private Boolean isMeetOrderCondition(BigDecimal buyPrice, BigDecimal sellPrice, BigDecimal maxBuyPrice, BigDecimal minSellPrice){
-		Boolean meetBuyCondition = buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
-		Boolean meetSellCondition = minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
-		return meetBuyCondition && meetSellCondition;
+		return isMeetBuyOrderCondition(buyPrice, maxBuyPrice) && isMeetSellOrderCondition(sellPrice, minSellPrice);
 	}
+	
+	//判断是否满足下买单的条件
+	private Boolean isMeetBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice){
+		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
+	}
+	
+	//判断是否满足下卖单的条件
+	private Boolean isMeetSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice){
+		return minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
+	}
+	
 	
 	/**
 	 * 
@@ -508,62 +419,78 @@ public class SimpleHedge {
 	private Boolean updateLiveOrders(){
 		
 		Collections.sort(liveBuyOrderPairs, orderByBuyPriceDesc);
-
-		for(int i=0, k=0; i<liveBuyOrderPairs.size() - k; i++){
+		int primitiveBuyOrderSize = liveBuyOrderPairs.size();
+		for(int i=0, k=0; i<primitiveBuyOrderSize - k; i++){
 			Order order = trader.getOrder(liveBuyOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
 			if(order == null){
 				return false;
 			}
+			LiveOrderPair orderPairs = liveBuyOrderPairs.get(i);
+			Boolean isStatusChanged = false;
 			//订单已经成交
-			if(order.getStatus().equals("FILLED")){
-				liveBuyOrderPairs.remove(i);
-				k++;
-				//更新数据库
-				Session session = HibernateUtil.getSession();
-				Transaction transaction = session.beginTransaction();
-				String hql = "from LiveOrderPair where buyOrderId=:buyOrderId and currency=:currency";
-				Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
-				query.setParameter("buyOrderId", order.getOrderId());
-				query.setParameter("currency", order.getCurrency());
-				LiveOrderPair orderPairs = query.getResultList().get(0);
+			if(order.getStatus().equals(OrderStatus.FILLED)){
 				orderPairs.setBuyOrderPrice(order.getPrice());
 				orderPairs.setBuyOrderStatus(order.getStatus());
 				orderPairs.setBuyOrderQuantity(order.getQuantity());
+				isStatusChanged = true;
+			}else if (order.getStatus().equals(OrderStatus.CANCELED)){//订单已被取消
+				//订单不能被取消，被取消的话对冲实现起来困难，将被取消的订单放到计划订单列表中
+				orderPairs.setBuyOrderStatus("PLAN");
+				planBuyOrderPairs.add(orderPairs);
+				isStatusChanged = true;
+			}//因为金额大的买单都没有成交，下面金额小的更不可能成交，所以直接跳出，不必再查看是否成交。
+			
+			if(isStatusChanged == true){
+				liveBuyOrderPairs.remove(i);
+				k++;
+				i--;
+				//更新数据库
+				Session session = HibernateUtil.getSession();
+				Transaction transaction = session.beginTransaction();
 				session.persist(orderPairs);
+				
 				transaction.commit();
 				session.close();
-			}else{//因为金额大的买单都没有成交，下面金额小的更不可能成交，所以直接跳出，不必再查看是否成交。
+			}else{
 				break;
 			}
 		}
 		
 		Collections.sort(liveSellOrderPairs, orderBySellPriceAsc);
-		for(int i=0, k=0; i<liveSellOrderPairs.size() - k; i++){
-			Order order = trader.getOrder(liveSellOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
+		int primitiveSellOrderSize = liveSellOrderPairs.size();
+		for(int i=0, k=0; i<primitiveSellOrderSize - k; i++){
+			Order order = trader.getOrder(liveSellOrderPairs.get(i).getCurrency(), liveSellOrderPairs.get(i).getSellOrderId());
+			LiveOrderPair orderPair = liveSellOrderPairs.get(i);
+			Boolean isStatusChanged = false;
 			if(null == order ){
 				return false;
 			}else{
-				if(order.getStatus().equals("FILLED")){
+				if(order.getStatus().equals(OrderStatus.FILLED)){
+					orderPair.setSellOrderStatus(order.getStatus());
+					orderPair.setSellOrderPrice(order.getPrice());
+					orderPair.setSellOrderQuantity(order.getQuantity());
 					liveSellOrderPairs.remove(i);
-					k++;
-					//更新数据库
-					Session session = HibernateUtil.getSession();
-					Transaction transaction = session.beginTransaction();
-					String hql = "from LiveOrderPair where sellOrderId=:sellOrderId and currency=:currency";
-					Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
-					query.setParameter("sellOrderId", order.getOrderId());
-					query.setParameter("currency", order.getCurrency());
-					LiveOrderPair orderPairs = query.getResultList().get(0);
-					orderPairs.setSellOrderPrice(order.getPrice());
-					orderPairs.setSellOrderStatus(order.getStatus());
-					orderPairs.setSellOrderQuantity(order.getQuantity());
-					session.persist(orderPairs);
-					transaction.commit();
-					session.close();
-				}else{//金额小的卖单都没有成交，金额大的卖单更不可能成交
-					break;
+					isStatusChanged = true;
+				}else if(order.getStatus().equals(OrderStatus.CANCELED)){
+					orderPair.setSellOrderStatus("PLAN");
+					planSellOrderPairs.add(orderPair);
+					isStatusChanged = true;
 				}
 			}
+			
+			if(isStatusChanged){
+				k++;
+				i--;
+				//更新数据库
+				Session session = HibernateUtil.getSession();
+				Transaction transaction = session.beginTransaction();
+				session.persist(orderPair);
+				transaction.commit();
+				session.close();
+			}else{//金额小的卖单状态没有改变，金额大的卖单更不可能成交
+				break;
+			}
+			
 		}
 		return true;
 	}
@@ -679,6 +606,15 @@ public class SimpleHedge {
 		return pricePrecision;
 	}
 
+	public Long getFailedSleepTime() {
+		return failedSleepTime;
+	}
+
+	//设置API失败之后的休息时间（单位：毫秒），默认1000ms
+	public void setFailedSleepTime(Long failedSleepTime) {
+		this.failedSleepTime = failedSleepTime;
+	}
+
 	/**
 	 * 设置价格精度，小数点后 pricePrecision 位。
 	 * @param pricePrecision 默认值： 2
@@ -713,6 +649,185 @@ public class SimpleHedge {
 		public void setSellPrice(BigDecimal sellPrice) {
 			this.sellPrice = sellPrice;
 		}
+	}
+	
+	
+	/**
+	 * 交易入口，调用此方法之后系统将按照策略持续下单，更新订单信息。
+	 */
+	public void earnMoney(){
+
+		//初始化对象
+		this.init();
+		
+		//校验参数
+		if(!this.validateParameters()){
+			logger.fatal("参数校验失败！退出系统。");
+			System.exit(0);
+		}
+		//同步订单信息
+		this.updateOrders();
+		
+		while(true){
+			
+			delay(cycle);
+			
+			//更新挂单信息
+			updateLiveOrders();
+			
+			Depth depth = trader.getDepth(currency);
+			//若获取深度信息失败，则暂停一段时间后再继续
+			if(depth == null){
+				delay(failedSleepTime);
+				continue;
+			}
+			
+			Ticker ticker = trader.getTicker(currency);
+			if(null == ticker){
+				delay(60000L);
+				continue;
+			}
+			
+			PricePair pricePair = new PricePair();
+			
+			// 计算进行中的订单中的最高买价和最低卖价
+			BigDecimal maxBuyPrice = null;
+			BigDecimal minSellPrice = null;
+			closestPrice(pricePair);
+			maxBuyPrice = pricePair.getBuyPrcie();
+			minSellPrice = pricePair.getSellPrice();
+
+			//计算买入价与卖出价
+			BigDecimal buyPrice = null;	//买入价
+			BigDecimal sellPrice = null;//卖出价
+
+			
+			Boolean isBuy = false; //标志此轮是否下了买单
+			Boolean isSell = false; //标志此轮是否下了卖单
+			
+			//优先以计划订单中的买入价格的最高价和卖出价格的最低价作为买入价和卖出价
+			//存在计划的买单
+			if(planBuyOrderPairs.size()>0){
+				Collections.sort(planBuyOrderPairs, orderByBuyPriceDesc);
+				LiveOrderPair maxBuyPricePlanBuyOrderPair = planBuyOrderPairs.get(0);//计划买入订单中买入价最高的订单
+				buyPrice = maxBuyPricePlanBuyOrderPair.getBuyOrderPrice();
+				if(isMeetBuyOrderCondition(buyPrice, maxBuyPrice)){//满足下计划买单的条件
+					Order order = trader.order(OrderSide.BUY, maxBuyPricePlanBuyOrderPair.getCurrency(), 
+							maxBuyPricePlanBuyOrderPair.getBuyOrderQuantity() , buyPrice);
+					if(null != order){//下单成功
+						isBuy = true;
+						maxBuyPricePlanBuyOrderPair.setBuyOrderId(order.getOrderId());
+						maxBuyPricePlanBuyOrderPair.setBuyOrderStatus(order.getStatus());
+						liveBuyOrderPairs.add(maxBuyPricePlanBuyOrderPair);//加入到进行中买单列表
+						planBuyOrderPairs.remove(0);//从计划买单列表中移除
+						Session session = HibernateUtil.getSession();//同步数据库中的状态
+						session.beginTransaction();
+						session.merge(maxBuyPricePlanBuyOrderPair);
+						session.getTransaction().commit();
+					}else{
+						logger.debug("下计划买单失败！");
+						delay(1000L);
+						continue;
+					}
+				}
+			}
+			
+			if(planSellOrderPairs.size()>0){
+				Collections.sort(planSellOrderPairs, orderBySellPriceAsc);
+				LiveOrderPair minSellPricePlanSellOrderPair = planSellOrderPairs.get(0);
+				sellPrice = minSellPricePlanSellOrderPair.getSellOrderPrice();
+				if(isMeetSellOrderCondition(sellPrice, minSellPrice)){//满足下计划卖单的条件
+					Order order = trader.order(OrderSide.SELL, minSellPricePlanSellOrderPair.getCurrency(),
+							minSellPricePlanSellOrderPair.getSellOrderQuantity(), sellPrice);
+					if(null != order){
+						isSell = true;
+						minSellPricePlanSellOrderPair.setSellOrderId(order.getOrderId());
+						minSellPricePlanSellOrderPair.setSellOrderStatus(order.getStatus());
+						liveSellOrderPairs.add(minSellPricePlanSellOrderPair);
+						planSellOrderPairs.remove(0);
+						Session session = HibernateUtil.getSession();
+						session.beginTransaction();
+						session.merge(minSellPricePlanSellOrderPair);
+						session.getTransaction().commit();
+					}else{
+						logger.error("下计划卖单失败！");
+					}
+				}
+			}
+			
+			if(isBuy || isSell){//此轮已经下单了
+				continue;
+			}
+			
+			// 根据行情来计算买单和卖单价格
+			this.calculatePrice(depth, ticker, pricePair);
+			buyPrice = pricePair.getBuyPrcie();
+			sellPrice = pricePair.getSellPrice();
+			
+			LiveOrderPair orderPair = new LiveOrderPair();
+			orderPair.setCreateTimestamp(System.currentTimeMillis());
+			orderPair.setModifyTimestamp(System.currentTimeMillis());
+			orderPair.setCurrency(currency);
+			orderPair.setPlantform(plantform);
+			orderPair.setBuyOrderPrice(buyPrice);
+			orderPair.setBuyOrderQuantity(quantity);
+			orderPair.setSellOrderPrice(sellPrice);
+			orderPair.setSellOrderQuantity(quantity);
+			
+			if(isMeetBuyOrderCondition(buyPrice, maxBuyPrice)){
+				Order buyOrder = trader.order("BUY", currency, quantity, buyPrice);
+				if(null == buyOrder){
+					logger.debug("买单下单失败，跳过此轮下单。");
+					delay(1000L);
+					isBuy = false;
+				}else{
+					//买单下单成功
+					liveBuyOrderPairs.add(orderPair);
+					orderPair.setBuyOrderStatus(buyOrder.getStatus());
+					orderPair.setBuyOrderId(buyOrder.getOrderId());
+					isBuy = true;
+				}
+			}else{
+				isBuy = false;
+			}
+			
+			if(isMeetSellOrderCondition(sellPrice, minSellPrice)){
+				Order sellOrder = trader.order("SELL", currency, quantity, sellPrice);
+				
+				//卖单若下单成功，则更新订单编号和状态，否则将订单设置为计划订单
+				if(null == sellOrder){
+					logger.debug("卖单下单失败，将卖单转化为计划卖单。");
+					delay(1000L);
+					isSell = false;
+				}else{
+					liveSellOrderPairs.add(orderPair);
+					orderPair.setSellOrderId(sellOrder.getOrderId());
+					orderPair.setSellOrderStatus(sellOrder.getStatus());
+					isSell = true;
+				}
+			}else{
+				isSell = false;
+			}
+			
+			if(isSell || isBuy){//买单或者卖单下单成功了
+				
+				if(!isSell){//卖单下单失败
+					orderPair.setSellOrderStatus("PLAN");
+					planSellOrderPairs.add(orderPair);
+				}else if(!isBuy){//买单下单失败
+					orderPair.setBuyOrderStatus("PLAN");
+					planBuyOrderPairs.add(orderPair);
+				}
+				
+				//保存到数据库
+				Session session = HibernateUtil.getSession();
+				Transaction tx = session.beginTransaction();
+				session.save(orderPair);
+				tx.commit();
+				session.close();
+			}			
+		}
+		
 	}
 	
 	public static void main(String[] args){
