@@ -1,0 +1,46 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<Configuration status="WARN">
+  <Appenders>
+    <Console name="Console" target="SYSTEM_OUT">
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %l - %msg%n"/>
+    </Console>
+    
+    <File name="Orders" fileName="F:/trade.txt" >
+    	<PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} %l - %msg%n"/>
+    </File>
+    
+  <RollingFile name="RollingLogFile" fileName="logs/app.log"
+                 filePattern="logs/$${date:yyyy-MM}/app-%d{MM-dd-yyyy}-%i.log.gz">
+      <PatternLayout>
+        <Pattern>%d %p %c{1.} [%t] %m%n</Pattern>
+      </PatternLayout>
+      <Policies>
+        <TimeBasedTriggeringPolicy />
+        <SizeBasedTriggeringPolicy size="20 MB"/>
+      </Policies>
+      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} %l - %msg%n"/>
+  </RollingFile>
+    
+  </Appenders>
+  
+  
+  
+  <Loggers>
+  	<!-- <Logger name="traderobot.strategy.TradePair" >
+  		<AppenderRef ref = "Console" />
+  	</Logger> -->
+  	
+  	<!-- <logger name="org.hibernate.SQL" level="debug">
+   		<level value="TRACE"/> 
+	</logger>  --> 	
+	
+	<Logger name="SimpleHedgeLogger" level="debug">
+		<AppenderRef ref="RollingLogFile" />
+	</Logger>
+	
+    <Root level="debug">
+      <AppenderRef ref = "Console" />
+    </Root>
+  </Loggers>
+</Configuration>

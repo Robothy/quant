@@ -73,4 +73,12 @@
 			<version>0.0.1-SNAPSHOT</version>
 		</dependency>
   </dependencies>
+  
+  <resources>
+  	<resource>
+  		<directory>/src/main/resources</directory>
+  		<filtering>false</filtering>
+  	</resource>
+  </resources>
+  
 </project>
