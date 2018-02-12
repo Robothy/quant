@@ -25,7 +25,7 @@ import traderobot.trade.TraderFactory;
 
 public class SimpleHedge {
 	
-	private static final Logger logger = LogManager.getLogger(SimpleHedge.class);
+	private static final Logger logger = LogManager.getLogger("SimpleHedgeLogger");
 	
 	//交易平台
 	private String plantform = null;
@@ -412,6 +412,18 @@ public class SimpleHedge {
 		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
 	}
 	
+	//判断是否满足下买单的条件
+	private Boolean isMeetPlanBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice, Depth depth){
+		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0 
+				|| buyPrice.compareTo(depth.getAsks().get(0).getPrice()) > 0;
+	}
+	
+	//判断是否满足下卖单的条件
+	private Boolean isMeetPlanSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice, Depth depth){
+		return minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0
+				|| sellPrice.compareTo(depth.getBids().get(0).getPrice()) > 0;
+	}
+	
 	//判断是否满足下卖单的条件
 	private Boolean isMeetSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice){
 		return minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
@@ -741,7 +753,7 @@ public class SimpleHedge {
 				Collections.sort(planBuyOrderPairs, orderByBuyPriceDesc);
 				LiveOrderPair maxBuyPricePlanBuyOrderPair = planBuyOrderPairs.get(0);//计划买入订单中买入价最高的订单
 				buyPrice = maxBuyPricePlanBuyOrderPair.getBuyOrderPrice();
-				if(isMeetBuyOrderCondition(buyPrice, maxBuyPrice)){//满足下计划买单的条件
+				if(isMeetPlanBuyOrderCondition(buyPrice, maxBuyPrice, depth)){//满足下计划买单的条件
 					Order order = trader.order(OrderSide.BUY, maxBuyPricePlanBuyOrderPair.getCurrency(), 
 							maxBuyPricePlanBuyOrderPair.getBuyOrderQuantity() , buyPrice);
 					if(null != order){//下单成功
@@ -766,7 +778,7 @@ public class SimpleHedge {
 				Collections.sort(planSellOrderPairs, orderBySellPriceAsc);
 				LiveOrderPair minSellPricePlanSellOrderPair = planSellOrderPairs.get(0);
 				sellPrice = minSellPricePlanSellOrderPair.getSellOrderPrice();
-				if(isMeetSellOrderCondition(sellPrice, minSellPrice)){//满足下计划卖单的条件
+				if(isMeetPlanSellOrderCondition(sellPrice, minSellPrice, depth)){//满足下计划卖单的条件
 					Order order = trader.order(OrderSide.SELL, minSellPricePlanSellOrderPair.getCurrency(),
 							minSellPricePlanSellOrderPair.getSellOrderQuantity(), sellPrice);
 					if(null != order){
