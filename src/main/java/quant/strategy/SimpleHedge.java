@@ -629,8 +629,9 @@ public class SimpleHedge {
 	}
 
 	//设置API失败之后的休息时间（单位：毫秒），默认1000ms
-	public void setFailedSleepTime(Long failedSleepTime) {
+	public SimpleHedge setFailedSleepTime(Long failedSleepTime) {
 		this.failedSleepTime = failedSleepTime;
+		return this;
 	}
 
 	/**
@@ -865,14 +866,15 @@ public class SimpleHedge {
 		.setFeeRate(new BigDecimal("0.002"))
 		.setCurrency("HSR_QC")
 		.setCycle(200L)
-		.setIntervalRate(new BigDecimal("0.02"))
+		.setIntervalRate(new BigDecimal("0.005"))
 		.setMaxPrice(new BigDecimal("150"))
 		.setMinPrice(new BigDecimal("0.45"))
 		.setMaxProfitMargin(new BigDecimal("0.05"))
 		.setMinProfitMargin(new BigDecimal("0.005"))
 		.setPlantform("zb.com")
-		.setQuantity(new BigDecimal("0.01"))
-		.setPricePrecision(2);
+		.setQuantity(new BigDecimal("0.02"))
+		.setPricePrecision(2)
+		.setFailedSleepTime(10000L);;
 		hedge.earnMoney();
 	}
 	
