@@ -838,7 +838,10 @@ public class SimpleHedge {
 				
 				//卖单若下单成功，则更新订单编号和状态，否则将订单设置为计划订单
 				if(null == sellOrder){
-					logger.debug("卖单下单失败，将卖单转化为计划卖单。");
+					logger.debug("卖单下单失败。");
+					if(isBuy) {
+						logger.debug("买单下单成功，卖单下单失败，卖单将被转化为计划卖单。");
+					}
 					delay(1000L);
 					isSell = false;
 				}else{
@@ -877,16 +880,16 @@ public class SimpleHedge {
 		hedge
 		.setFeeRate(new BigDecimal("0.002"))
 		.setCurrency("HSR_QC")
-		.setCycle(200L)
-		.setIntervalRate(new BigDecimal("0.005"))
+		.setCycle(1000L)
+		.setIntervalRate(new BigDecimal("0.008"))
 		.setMaxPrice(new BigDecimal("150"))
 		.setMinPrice(new BigDecimal("0.45"))
 		.setMaxProfitMargin(new BigDecimal("0.05"))
-		.setMinProfitMargin(new BigDecimal("0.005"))
+		.setMinProfitMargin(new BigDecimal("0.01"))
 		.setPlantform("zb.com")
 		.setQuantity(new BigDecimal("0.02"))
 		.setPricePrecision(2)
-		.setFailedSleepTime(10000L);;
+		.setFailedSleepTime(30000L);;
 		hedge.earnMoney();
 	}
 	

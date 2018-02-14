@@ -6,12 +6,17 @@
   <session-factory>
     <!-- Database connection settings -->
     <property name="hibernate.connection.driver_class">com.microsoft.sqlserver.jdbc.SQLServerDriver</property>
-    <property name="hibernate.connection.url">jdbc:sqlserver://sqlserver.cqfvwbqoquy8.us-east-2.rds.amazonaws.com:1433;databaseName=quant</property>
+    <property name="hibernate.connection.url">jdbc:sqlserver://sqlserver.cqfvwbqoquy8.us-east-2.rds.amazonaws.com:1433;databaseName=quant;autoReconnect=true;autoReconnectForPools=true</property>
     <property name="hibernate.connection.username">${user}</property>
     <property name="hibernate.connection.password">${password}</property>
-    <property name="show_sql">true</property>
-    
     <property name="hibernate.dialect">org.hibernate.dialect.SQLServer2012Dialect</property>
+    <property name="connection.pool_size">10</property>
+    <property name="show_sql">false</property>
+    <property name="validationQuery">SELECT 1</property>     
+    <property name="testOnBorrow">true</property>
+    <property name="test-before-use">true</property>
+    <property name="test-after-use">true</property>
+    
     <mapping class="quant.entity.LiveOrderPair" />    
     
   </session-factory>
