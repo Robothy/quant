@@ -258,74 +258,29 @@ public class SimpleHedge {
 		Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
 		query.setParameter("currency", currency);
 		List <LiveOrderPair> persistedOrderPairs = query.getResultList();
+		
 		for(LiveOrderPair orderPair : persistedOrderPairs){
-			Boolean buyOrderChanged = false; 
-			Boolean sellOrderChanged = false;
-			//若买入交易对没有完成，且买入交易并非计划交易
+			
 			String buyOrderStatus = orderPair.getBuyOrderStatus();
-			if(!"FILLED".equals(buyOrderStatus) && !"PLAN".equals(buyOrderStatus)){
-				Order order = trader.getOrder(currency, orderPair.getBuyOrderId());
-				if(null == order){
-					return false;
-				}
-				String currentStatus = buyOrderStatus;//数据库中当前状态
-				String latestStatus = order.getStatus();//服务器中最新状态
-				//数据库中订单的当前状态与服务器中的状态一致，证明没有发生改变
-				if(currentStatus.equals(latestStatus)){
-					buyOrderChanged = false;
-				}else{
-					orderPair.setBuyOrderPrice(order.getPrice());
-					orderPair.setBuyOrderStatus(order.getStatus());
-					logger.info("订单编号为[" + orderPair.getBuyOrderId() + "]的买单状态由" + currentStatus + "变为" + latestStatus );
-					buyOrderChanged = true;					
-				}
-				//订单状态没有完成，则将其加入到[进行中的卖单列表 liveBuyOrders 中]
-				if(!OrderStatus.FILLED.equals(latestStatus)){
-					liveBuyOrderPairs.add(orderPair);						
-				}
-			}
 			
 			String sellOrderStatus = orderPair.getSellOrderStatus();
-			if(!"FILLED".equals(sellOrderStatus) && !"PLAN".equals(sellOrderStatus)){
-				Order order = trader.getOrder(currency, orderPair.getSellOrderId());
-				if(null == order){
-					return false;
-				}
-				String currentStatus = sellOrderStatus;
-				String latestStatus = order.getStatus();
-				if(currentStatus.equals(latestStatus)){
-					sellOrderChanged = false;
-				}else{
-					orderPair.setSellOrderPrice(order.getPrice());
-					orderPair.setSellOrderStatus(order.getStatus());
-					logger.info("订单编号为[" + orderPair.getBuyOrderId() + "]的买单状态由" + currentStatus + "变为" + latestStatus );
-					sellOrderChanged = true;
-				}
-				
-				//卖单没有完成，则将其加入到 liveSellOrders 对象中
-				if(!OrderStatus.FILLED.equals(order.getStatus())){
-					liveSellOrderPairs.add(orderPair);
-				}
-			}
 			
-			//将计划下的订单对中包含买单的交易对放入到 planBuyOrderPairs 中
+			//将不同状态的订单放到不同的列表当中
+			
 			if("PLAN".equals(buyOrderStatus)){
 				planBuyOrderPairs.add(orderPair);
+			}else if(OrderStatus.NEW.equals(buyOrderStatus)){
+				liveBuyOrderPairs.add(orderPair);
 			}
 			
 			if("PLAN".equals(sellOrderStatus)){
 				planSellOrderPairs.add(orderPair);
+			}else if(OrderStatus.NEW.equals(sellOrderStatus)){
+				liveSellOrderPairs.add(orderPair);
 			}
 			
-			//订单发生变化，更新数据库订单的状态
-			if (buyOrderChanged || sellOrderChanged){
-				session.beginTransaction();
-				session.merge(orderPair);
-				session.getTransaction().commit();
-			}
 		}
-		session.close();
-		logger.info("订单初始化同步完成！");
+		logger.info("订单从数据库加载完成！");
 		logger.info("进行中买单数：" + liveBuyOrderPairs.size());
 		logger.info("进行中卖单数：" + liveSellOrderPairs.size());
 		logger.info("计划中买单数：" + planBuyOrderPairs.size());
@@ -402,26 +357,35 @@ public class SimpleHedge {
 		pricePair.setSellPrice(_minSellPrice);
 	}
 	
-	//检查是否满足下单条件，即买单间隔与卖单间隔操作最小间隔
-	private Boolean isMeetOrderCondition(BigDecimal buyPrice, BigDecimal sellPrice, BigDecimal maxBuyPrice, BigDecimal minSellPrice){
-		return isMeetBuyOrderCondition(buyPrice, maxBuyPrice) && isMeetSellOrderCondition(sellPrice, minSellPrice);
-	}
-	
-	//判断是否满足下买单的条件
+	/**
+	 * 判断是否满足下普通买单的条件，若买入价与当前账户进行买单中最高买价相差超过订单间隔比率 intervalRate，
+	 * 则表示满足买入条件，否则不满足。
+	 * @param buyPrice 买入价
+	 * @param maxBuyPrice 当前账户进行订单中买入价格最高买单
+	 * @return true - 满足买入条件， false - 不满足条件
+	 */
 	private Boolean isMeetBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice){
 		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
 	}
 	
-	//判断是否满足下买单的条件
+	/**
+	 * 判断是否满足下计划买单的条件。 当计划买单中的最高价满足下普通买单条件或者计划买单中的最高价大于卖一价时，
+	 * 表示满足下计划买单的条件。
+	 * <p>采用这种方式判断的目的在于尽快完成对冲订单对。
+	 * @param buyPrice 计划买单中的最高价
+	 * @param maxBuyPrice 当前账户进行买单中的最高买价 
+	 * @param depth 市场深度信息
+	 * @return true - 满足买入条件， false - 不满足买入条件
+	 */
 	private Boolean isMeetPlanBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice, Depth depth){
-		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0 
+		return isMeetBuyOrderCondition(buyPrice, maxBuyPrice) 
 				|| buyPrice.compareTo(depth.getAsks().get(0).getPrice()) > 0;
 	}
 	
-	//判断是否满足下卖单的条件
+	//判断是否满足下计划卖单的条件
 	private Boolean isMeetPlanSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice, Depth depth){
-		return minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0
-				|| sellPrice.compareTo(depth.getBids().get(0).getPrice()) > 0;
+		return isMeetSellOrderCondition(sellPrice, minSellPrice)
+				|| sellPrice.compareTo(depth.getBids().get(0).getPrice()) < 0;
 	}
 	
 	//判断是否满足下卖单的条件
@@ -519,7 +483,6 @@ public class SimpleHedge {
 			}else{//金额小的卖单状态没有改变，金额大的卖单更不可能成交
 				break;
 			}
-			
 		}
 		return true;
 	}
@@ -768,8 +731,8 @@ public class SimpleHedge {
 						session.getTransaction().commit();
 					}else{
 						logger.debug("下计划买单失败！");
-						delay(1000L);
-						continue;
+						//delay(1000L);
+						//continue;
 					}
 				}
 			}
@@ -819,9 +782,9 @@ public class SimpleHedge {
 			if(isMeetBuyOrderCondition(buyPrice, maxBuyPrice)){
 				Order buyOrder = trader.order("BUY", currency, quantity, buyPrice);
 				if(null == buyOrder){
-					logger.debug("买单下单失败，跳过此轮下单。");
+					logger.debug("买单下单失败。");
 					isBuy = false;
-					continue;
+					//continue;
 				}else{
 					//买单下单成功
 					liveBuyOrderPairs.add(orderPair);
@@ -887,7 +850,7 @@ public class SimpleHedge {
 		.setMaxProfitMargin(new BigDecimal("0.05"))
 		.setMinProfitMargin(new BigDecimal("0.01"))
 		.setPlantform("zb.com")
-		.setQuantity(new BigDecimal("0.02"))
+		.setQuantity(new BigDecimal("0.01"))
 		.setPricePrecision(2)
 		.setFailedSleepTime(30000L);;
 		hedge.earnMoney();
