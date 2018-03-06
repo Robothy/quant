@@ -74,13 +74,13 @@ public class SimpleHedge {
 	private List<LiveOrderPair> planBuyOrderPairs = null;
 	
 	//排序规则
-	private Comparator<LiveOrderPair> orderByBuyPriceAsc = null;
+	//private Comparator<LiveOrderPair> orderByBuyPriceAsc = null;
 	
 	private Comparator<LiveOrderPair> orderByBuyPriceDesc = null;
 	
 	private Comparator<LiveOrderPair> orderBySellPriceAsc = null;
 	
-	private Comparator<LiveOrderPair> orderBySellPriceDesc = null;
+	//private Comparator<LiveOrderPair> orderBySellPriceDesc = null;
 	
 	private BigDecimal kM = null;
 	
@@ -208,12 +208,6 @@ public class SimpleHedge {
 			kN = new BigDecimal(StrictMath.sqrt(wholeMinProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
 		}
 		
-		orderByBuyPriceAsc = new Comparator<LiveOrderPair>() {
-			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
-				return o1.getBuyOrderPrice().compareTo(o2.getBuyOrderPrice());
-			}
-		};
-		
 		orderByBuyPriceDesc = new Comparator<LiveOrderPair>() {
 			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
 				return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());
@@ -225,13 +219,6 @@ public class SimpleHedge {
 				return o1.getBuyOrderPrice().compareTo(o2.getBuyOrderPrice());
 			}
 		};
-		
-		orderBySellPriceDesc = new Comparator<LiveOrderPair>() {
-			public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
-				return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());
-			}
-		};
-		
 		
 	}
 	
@@ -713,7 +700,13 @@ public class SimpleHedge {
 			//优先以计划订单中的买入价格的最高价和卖出价格的最低价作为买入价和卖出价
 			//存在计划的买单
 			if(planBuyOrderPairs.size()>0){
-				Collections.sort(planBuyOrderPairs, orderByBuyPriceDesc);
+				Collections.sort(planBuyOrderPairs, new Comparator<LiveOrderPair>() {
+					public int compare(LiveOrderPair o1, LiveOrderPair o2) {
+						return o1.getSellOrderStatus().compareTo(o2.getSellOrderStatus()) == 0 ?
+								o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice()) : 
+									o1.getSellOrderStatus().compareTo(o2.getSellOrderStatus());
+					}
+				});
 				LiveOrderPair maxBuyPricePlanBuyOrderPair = planBuyOrderPairs.get(0);//计划买入订单中买入价最高的订单
 				buyPrice = maxBuyPricePlanBuyOrderPair.getBuyOrderPrice();
 				if(isMeetPlanBuyOrderCondition(buyPrice, maxBuyPrice, depth)){//满足下计划买单的条件
@@ -738,7 +731,13 @@ public class SimpleHedge {
 			}
 			
 			if(planSellOrderPairs.size()>0){
-				Collections.sort(planSellOrderPairs, orderBySellPriceAsc);
+				Collections.sort(planSellOrderPairs, new Comparator<LiveOrderPair>() {
+					public int compare(LiveOrderPair o1, LiveOrderPair o2) {
+						return o1.getBuyOrderStatus().compareTo(o2.getBuyOrderStatus()) == 0 ?
+								o1.getSellOrderPrice().compareTo(o2.getSellOrderPrice()) :
+									o1.getBuyOrderStatus().compareTo(o2.getBuyOrderStatus());
+					}
+				});
 				LiveOrderPair minSellPricePlanSellOrderPair = planSellOrderPairs.get(0);
 				sellPrice = minSellPricePlanSellOrderPair.getSellOrderPrice();
 				if(isMeetPlanSellOrderCondition(sellPrice, minSellPrice, depth)){//满足下计划卖单的条件
