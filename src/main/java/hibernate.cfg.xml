@@ -5,11 +5,16 @@
 <hibernate-configuration>      
   <session-factory>
     <!-- Database connection settings -->
+    <!-- 
     <property name="hibernate.connection.driver_class">com.microsoft.sqlserver.jdbc.SQLServerDriver</property>
     <property name="hibernate.connection.url">jdbc:sqlserver://sqlserver.cqfvwbqoquy8.us-east-2.rds.amazonaws.com:1433;databaseName=quant;autoReconnect=true;autoReconnectForPools=true</property>
+    <property name="hibernate.dialect">org.hibernate.dialect.SQLServer2012Dialect</property>
+     -->
+    <property name="hibernate.connection.url">jdbc:mysql://39.108.113.223:3306/quant</property>
+    <property name="hibernate.dialect">org.hibernate.dialect.MySQL5Dialect</property>
+    <property name="hibernate.connection.driver_class">com.mysql.jdbc.Driver</property>
     <property name="hibernate.connection.username">${user}</property>
     <property name="hibernate.connection.password">${password}</property>
-    <property name="hibernate.dialect">org.hibernate.dialect.SQLServer2012Dialect</property>
     <property name="connection.pool_size">10</property>
     <property name="show_sql">false</property>
     <property name="validationQuery">SELECT 1</property>     
