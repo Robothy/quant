@@ -1,3 +1,6 @@
+/**
+ * 简单对冲策略进行中订单对的表
+ */
 create table LIVE_ORDER_PAIR(
 	DATA_ID char(32) primary key,
 	PLANTFORM varchar(30),
@@ -11,6 +14,5 @@ create table LIVE_ORDER_PAIR(
 	SELL_ORDER_ID varchar(32),
 	SELL_ORDER_PRICE numeric(20, 10),
 	SELL_ORDER_QUANTITY numeric(20, 10),
-	SELL_ORDER_STATUS varchar(15)
-	
+	SELL_ORDER_STATUS varchar(15)	
 )
