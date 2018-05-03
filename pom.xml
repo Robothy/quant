@@ -69,7 +69,7 @@
 
 		<dependency>
 			<groupId>luofuxiang.site</groupId>
-			<artifactId>TradeRobot</artifactId>
+			<artifactId>exunion</artifactId>
 			<version>0.0.1-SNAPSHOT</version>
 		</dependency>
 		

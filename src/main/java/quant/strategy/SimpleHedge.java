@@ -15,13 +15,12 @@ import org.hibernate.query.Query;
 
 import quant.entity.LiveOrderPair;
 import quant.utils.HibernateUtil;
-import traderobot.metaobjects.Depth;
-import traderobot.metaobjects.Order;
-import traderobot.metaobjects.OrderSide;
-import traderobot.metaobjects.OrderStatus;
-import traderobot.metaobjects.Ticker;
-import traderobot.trade.Tradable;
-import traderobot.trade.TraderFactory;
+import exunion.metaobjects.Depth;
+import exunion.metaobjects.Order;
+import exunion.metaobjects.OrderSide;
+import exunion.metaobjects.OrderStatus;
+import exunion.metaobjects.Ticker;
+import exunion.exchange.*;
 
 public class SimpleHedge {
 	
@@ -30,7 +29,7 @@ public class SimpleHedge {
 	//交易平台
 	private String plantform = null;
 	
-	private Tradable trader = null;
+	private Exchange trader = null;
 	
 	//API操作失败休息时间， （单位：毫秒），默认 1000ms
 	private Long failedSleepTime = 1000L;
@@ -179,7 +178,7 @@ public class SimpleHedge {
 	 */
 	private void init(){
 		if(null == trader){
-			trader = TraderFactory.newInstance(plantform);
+			trader = new ZbExchange();
 		}
 		
 		if(null == liveSellOrderPairs){
@@ -514,7 +513,7 @@ public class SimpleHedge {
 		return this;
 	}
 	
-	public Tradable getTrader() {
+	public Exchange getTrader() {
 		return trader;
 	}
 
