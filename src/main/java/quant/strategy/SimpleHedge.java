@@ -29,6 +29,15 @@ public class SimpleHedge {
 	//交易平台
 	private String plantform = null;
 	
+	//是否需要走代理
+	private Boolean needProxy = false;
+	
+	//交易所提供的key
+	private String key = "";
+	
+	//交易所提供的 secret
+	private String secret = "";
+	
 	private Exchange trader = null;
 	
 	//API操作失败休息时间， （单位：毫秒），默认 1000ms
@@ -96,6 +105,16 @@ public class SimpleHedge {
 		
 		if(null == plantform){
 			logger.error("交易平台不能为空。");
+			result = false;
+		}
+		
+		if(null == key || "".equals(key)){
+			logger.error("key 不能为空");
+			result = false;
+		}
+		
+		if(null == secret || "".equals(secret)){
+			logger.error("secret 不能为空。");
 			result = false;
 		}
 		
@@ -178,7 +197,7 @@ public class SimpleHedge {
 	 */
 	private void init(){
 		if(null == trader){
-			trader = new ZbExchange();
+			trader = ExchangeFactory.newInstance(plantform,key, secret ,needProxy);
 		}
 		
 		if(null == liveSellOrderPairs){
@@ -492,6 +511,21 @@ public class SimpleHedge {
 
 	public SimpleHedge setPlantform(String plantform) {
 		this.plantform = plantform;
+		return this;
+	}
+	
+	public SimpleHedge setKey(String key){
+		this.key = key;
+		return this;
+	}
+	
+	public SimpleHedge setSecret(String secret){
+		this.secret = secret;
+		return this;
+	}
+	
+	public SimpleHedge setNeedProxy(Boolean needProxy){
+		this.needProxy = needProxy;
 		return this;
 	}
 
@@ -848,10 +882,19 @@ public class SimpleHedge {
 		.setMaxProfitMargin(new BigDecimal("0.05"))
 		.setMinProfitMargin(new BigDecimal("0.01"))
 		.setPlantform("zb.com")
+		.setKey("b7de0080-bbb2-434145c-8ee1-80446a2bed2f")
+		.setSecret("1ad92744-f696-4962-9741232431281-760edca8c65d")
+		.setNeedProxy(true)
 		.setQuantity(new BigDecimal("0.01"))
 		.setPricePrecision(2)
-		.setFailedSleepTime(30000L);;
-		hedge.earnMoney();
+		.setFailedSleepTime(30000L);
+		//hedge.earnMoney();
+		
+		Exchange zbEx = ExchangeFactory.newInstance("zb.com", "b7de0080-bbb2-445c-8ee1-80446a2bed2f", "1ad92744-f696-4962-9781-760edca8c65d", true);
+		while(true){
+			zbEx.order("BUY", "BTC_QC", new BigDecimal("1"), new BigDecimal("0.3"));			
+		}
+		
 	}
 	
 }

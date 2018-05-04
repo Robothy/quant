@@ -30,9 +30,9 @@
   		<AppenderRef ref = "Console" />
   	</Logger> -->
   	
-  	<!-- <logger name="org.hibernate.SQL" level="debug">
+  	<logger name="org.hibernate.SQL" level="debug">
    		<level value="TRACE"/> 
-	</logger>  --> 	
+	</logger>	
 	
 	<Logger name="SimpleHedgeLogger" level="debug" additivity="false">
 		<AppenderRef ref="RollingLogFile" />
