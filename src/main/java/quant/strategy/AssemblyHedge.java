@@ -202,10 +202,15 @@ public class AssemblyHedge implements Strategy {
 		
 		// 开始执行策略
 		while(true){
+			logger.debug("新一轮。");
 			delay(cycle);
 			
 			Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth = getHedgeCurrencyPairDepth();
-			
+			if(null == hedgeCurrencyPairDepth){ // 获取深度信息失败
+				logger.error("获取深度信息失败, 将在 {} 秒后进行下一轮操作。", failedSleepTime / 60);
+				delay(failedSleepTime);
+				continue;
+			}
 			
 			
 			
