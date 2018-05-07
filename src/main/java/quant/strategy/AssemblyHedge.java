@@ -1,17 +1,21 @@
 package quant.strategy;
 
+import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.logging.log4j.LogManager;
 
 import org.apache.logging.log4j.Logger;
+import org.hibernate.id.GUIDGenerator;
+import org.hibernate.id.UUIDGenerator;
 
 import exunion.exchange.Exchange;
-import exunion.exchange.ExchangeFactory;
 import exunion.metaobjects.Depth;
+import quant.entity.AssemblyHedgeOrder;
 import quant.exchange.EndExchangeFactory;
 
 public class AssemblyHedge implements Strategy {
@@ -128,7 +132,7 @@ public class AssemblyHedge implements Strategy {
 	 * 初始化
 	 * @return
 	 */
-	private void init(){
+	private Boolean init(){
 		
 		// 构建交易所实例
 		if (null == exchanges){
@@ -143,6 +147,7 @@ public class AssemblyHedge implements Strategy {
 			}
 		}
 		
+		return true;
 	}
 	
 	/**
@@ -174,6 +179,16 @@ public class AssemblyHedge implements Strategy {
 		return result;
 	}
 	
+	/**
+	 * 根据对冲交易对的深度信息计算组合挂单。
+	 * @param hedgeCurrencyPairDepth 对冲币种对的深度信息
+	 * @return 计算得到组合对冲订单，若无对冲机会，则返回 null
+	 */
+	private List<AssemblyHedgeOrder> CalculateAssemblyHedgeOrder(Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth){
+		List<AssemblyHedgeOrder> assemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+		
+		return assemblyHedgeOrders;
+	}
 	
 	
 	/**
@@ -196,9 +211,15 @@ public class AssemblyHedge implements Strategy {
 			logger.error("校验参数失败！不再执行后续步骤。");
 			return;
 		}
+		logger.info("参数校验完成 ...");
 		
 		// 初始化
-		init();
+		if(!init()){
+			logger.error("初始化失败！不再执行后续步骤。");
+			return;
+		}
+		logger.info("初始化完成 ...");
+		
 		
 		// 开始执行策略
 		while(true){
@@ -212,6 +233,7 @@ public class AssemblyHedge implements Strategy {
 				continue;
 			}
 			
+			List<AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(hedgeCurrencyPairDepth);
 			
 			
 		}
@@ -221,9 +243,8 @@ public class AssemblyHedge implements Strategy {
 	
 	
 	public static void main(String[] args){
-		Map<String, String> r = new ConcurrentHashMap<String, String>();
-		r.put("123", "1");
-		System.out.println(r.containsValue("1"));
+		System.out.println(UUID.randomUUID().toString().replace("-", ""));
+		System.out.println(UUID.randomUUID().toString().replace("-", "").length());
 	}
 	
 }
