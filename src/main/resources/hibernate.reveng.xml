@@ -3,9 +3,12 @@
 
 <hibernate-reverse-engineering>
 	<table-filter match-catalog="quant" match-schema="dbo"
-		match-name=".*">
+		match-name=".*" exclude="true">
 	</table-filter>
 	<table-filter match-name="LIVE_ORDER_PAIRS" match-catalog="quant"
 		match-schema="dbo" exclude="true">
+	</table-filter>
+	<table-filter match-name="ASSEMBLY_HEDGE_ORDER"
+		match-catalog="quant">
 	</table-filter>
 </hibernate-reverse-engineering>
