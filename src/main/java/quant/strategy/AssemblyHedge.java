@@ -243,8 +243,8 @@ public class AssemblyHedge implements Strategy {
 	
 	
 	public static void main(String[] args){
-		System.out.println(UUID.randomUUID().toString().replace("-", ""));
-		System.out.println(UUID.randomUUID().toString().replace("-", "").length());
+		Exchange exchange = EndExchangeFactory.newInstance("zb.com");
+		System.out.println(exchange.getDepth("HSR_QC"));
 	}
 	
 }
