@@ -52,4 +52,16 @@ public class CommonDao {
 		session.getTransaction().commit();
 		session.close();
 	}
+	
+	/**
+	 * 保存或更新一批对象
+	 * @param objects
+	 */
+	public void saveOrUpdate(List<Object> objects){
+		Session session = HibernateUtil.getSession();
+		for(Object object : objects){
+			session.saveOrUpdate(object);
+		}
+		session.close();
+	}
 }
