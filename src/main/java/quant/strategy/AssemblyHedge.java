@@ -59,6 +59,12 @@ public class AssemblyHedge implements Strategy {
 	
 	private final CommonDao commonDao = new CommonDao();
 	
+	// 计划组合对冲单
+	private final List<AssemblyHedgeOrder> planAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	
+	// 已挂出的组合对冲单
+	private final List<AssemblyHedgeOrder> liveAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	
 	// 组合对冲币种对，即参与对冲组合的币种对，属性包括平台，币种对
 	private List<HedgeCurrencyPair> hedgeCurrencyPairs = null;
 	
@@ -339,6 +345,64 @@ public class AssemblyHedge implements Strategy {
 		return assemblyHedgeOrder;
 	}
 	
+	
+	/**
+	 * 更新挂单的状态
+	 * <p>
+	 * 对进行中的订单进行排序，即 <code>liveAssemblyHedgeOrder</code>，排序规则为
+	 * 	<ul>
+	 * <li> 卖单优先于买单，即 OrderSide desc
+	 * <li> 价格由低到高
+	 * <p> 排序之后的最终结果为第一个元素为最高价的买单，最后一个元素为最低价的卖单。
+	 * 更新订单时只需要两端开始查询更新即可，因为挂单总是优先成交最高价的买单和最低价的卖单。
+	 * 特殊情况是跨两个平台，买价高于卖价，这种情况比较少见，这里认为不可能出现此情况。
+	 * 
+	 * @param liveHedgeOrders 进行中的订单 
+	 * @return true - 更新成功； false - 更新失败
+	 */
+	private Boolean updateHedgeOrders(final List<AssemblyHedgeOrder> liveHedgeOrders){
+		Boolean result = false;
+		return result;
+	}
+	
+	/**
+	 * 根据深度信息下计划订单
+	 * <p> 对计划订单进行排序，排序规则同上。
+	 * <p> 一次性仅下一个订单(一个卖单或者一个买单)，下单之后，返回挂单信息。 
+	 * @param planHedgeOrders
+	 */
+	private AssemblyHedgeOrder placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depth,
+			final List<AssemblyHedgeOrder> planHedgeOrders, 
+			final List<AssemblyHedgeOrder> liveHedgeOrders){
+		return null;
+	}
+	
+	/**
+	 * 下对冲订单。
+	 * @return
+	 */
+	private void placeHedgeOrders(final Map<HedgeCurrencyPair, Depth> currencyPairDepth,
+			final List<AssemblyHedgeOrder> planHedgeOrders, 
+			final List<AssemblyHedgeOrder> liveHedgeOrders){
+		
+		// 计算组合单
+		List<AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(currencyPairDepth);
+		if(0 == assemblyHedgeOrders.size()){
+			logger.info("没有组合对冲交易机会。");
+		}else{
+			// 挂组合单
+			List<AssemblyHedgeOrder> hedgeOrders = order(assemblyHedgeOrders);
+			for(AssemblyHedgeOrder hedgeOrder : hedgeOrders){
+				if("PLAN".equals(hedgeOrder.getOrderStatus())){
+					liveHedgeOrders.add(hedgeOrder);
+				}else{
+					planHedgeOrders.add(hedgeOrder);
+				}
+			}
+			this.commonDao.saveOrUpdate(hedgeOrders);
+		}
+	}
+	
 	/**
 	 * 延时函数
 	 * @param ms 延时时间（单位：毫秒）
@@ -373,6 +437,14 @@ public class AssemblyHedge implements Strategy {
 			logger.debug("新一轮。");
 			delay(cycle);
 			
+			// 更新挂单状态
+			if(!updateHedgeOrders(this.liveAssemblyHedgeOrders)){
+				logger.error("更新挂单信息失败，将在 {} 秒后进行下一轮操作。", failedSleepTime / 60);
+				delay(failedSleepTime);
+				continue;
+			}
+			
+			// 获取深度信息
 			Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth = getHedgeCurrencyPairDepth();
 			if(null == hedgeCurrencyPairDepth){ // 获取深度信息失败
 				logger.error("获取深度信息失败, 将在 {} 秒后进行下一轮操作。", failedSleepTime / 60);
@@ -380,15 +452,15 @@ public class AssemblyHedge implements Strategy {
 				continue;
 			}
 			
-			// 计算组合单
-			List<AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(hedgeCurrencyPairDepth);
-			if(0 == assemblyHedgeOrders.size()){
-				logger.info("没有组合对冲交易机会。");
-			}else{
-				// 挂组合单
-				List<AssemblyHedgeOrder> hedgeOrders = order(assemblyHedgeOrders);
-				this.commonDao.saveOrUpdate(hedgeOrders);
+			// 优先下计划订单
+			AssemblyHedgeOrder planOrder = this.placePlanHedgeOrders(hedgeCurrencyPairDepth, this.planAssemblyHedgeOrders, this.liveAssemblyHedgeOrders);
+			if(planOrder != null){
+				logger.debug("下计划单成功。");
+				continue;
 			}
+			
+			// 前面操作都 OK 了，开始下组合对冲单
+			this.placeHedgeOrders(hedgeCurrencyPairDepth, this.planAssemblyHedgeOrders, this.liveAssemblyHedgeOrders);
 			
 		}
 		
