@@ -3,9 +3,11 @@ package quant.strategy;
 import java.math.BigDecimal;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Map.Entry;
 import java.util.concurrent.ConcurrentHashMap;
 
 import org.apache.logging.log4j.LogManager;
@@ -14,6 +16,7 @@ import org.apache.logging.log4j.Logger;
 import exunion.exchange.Exchange;
 import exunion.metaobjects.Depth;
 import exunion.metaobjects.Order;
+import exunion.metaobjects.OrderSide;
 import exunion.metaobjects.OrderStatus;
 import quant.dao.CommonDao;
 import quant.entity.AssemblyHedgeOrder;
@@ -187,6 +190,22 @@ public class AssemblyHedge implements Strategy {
 		return this;
 	}
 	
+	/**
+	 * 对冲组合单的排序规则
+	 * <p> 买单在前，卖单在后
+	 * <p> 价格高的在前，价格低的在后
+	 * 
+	 */
+	private Comparator<AssemblyHedgeOrder> hedgeOrderOrderingRule = new Comparator<AssemblyHedgeOrder>() {
+
+		public int compare(AssemblyHedgeOrder o1, AssemblyHedgeOrder o2) {
+			if(o1.getOrderSide().equals(o2.getOrderSide())){
+				return o2.getOrderPrice().compareTo(o1.getOrderPrice());
+			}else{
+				return o1.getOrderSide().compareTo(o2.getOrderSide());
+			}
+		}
+	}; 
 	
 	/*****************************************************************
 	 * 
@@ -214,7 +233,6 @@ public class AssemblyHedge implements Strategy {
 	 * @return
 	 */
 	private Boolean init(){
-		
 		// 构建交易所实例
 		if (null == exchanges){
 			exchanges = new HashMap<String, Exchange>();
@@ -227,7 +245,6 @@ public class AssemblyHedge implements Strategy {
 				exchanges.put(plantform, ex);
 			}
 		}
-		
 		return true;
 	}
 	
@@ -374,6 +391,43 @@ public class AssemblyHedge implements Strategy {
 	private AssemblyHedgeOrder placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depth,
 			final List<AssemblyHedgeOrder> planHedgeOrders, 
 			final List<AssemblyHedgeOrder> liveHedgeOrders){
+		logger.debug("准备下计划单 ...");
+		// 遍历计划单，下满足条件的单
+		for(AssemblyHedgeOrder hedgeOrder : planHedgeOrders){
+			for(Entry<HedgeCurrencyPair, Depth> dep : depth.entrySet()){
+				if(hedgeOrder.getPlantfrom().equals(dep.getKey().getPlatform())
+						&& hedgeOrder.getCurrency().equals(dep.getKey().getCurrencyPair())){
+					
+					if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
+						BigDecimal sell1Price = dep.getValue().getAsks().get(0).getPrice();
+						// 卖一价小于买单的买价
+						if(sell1Price.compareTo(hedgeOrder.getOrderPrice()) < 0){
+							this.order(hedgeOrder);
+						}
+					}else if(OrderSide.SELL.equals(hedgeOrder.getOrderSide())){
+						BigDecimal buy1Price = dep.getValue().getBids().get(0).getPrice();
+						// 买一价大于卖单的卖价
+						if(buy1Price.compareTo(hedgeOrder.getOrderPrice()) > 0){
+							this.order(hedgeOrder);
+						}
+					}else{
+						logger.warn("对冲单的方向不正确。");
+					}
+					
+					// 订单的状态不再为 PLAN, 同步数据库，并将对象由 playHedgeOrders 移动到 liveHedgeOrders 中。
+					if(!"PLAN".equals(hedgeOrder.getOrderStatus())){
+						logger.debug("计划单[exchange={},currency={}, side={}, price={}, quantity={}]下单成功。",
+								hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderSide(),
+								hedgeOrder.getOrderPrice(), hedgeOrder.getOrderQuantity());
+						commonDao.saveOrUpdate(hedgeOrder);
+						liveHedgeOrders.add(hedgeOrder);
+						planHedgeOrders.remove(hedgeOrder);
+					}
+					
+				}
+			}
+		}
+		logger.debug("下计划单完成。");
 		return null;
 	}
 	
@@ -470,12 +524,8 @@ public class AssemblyHedge implements Strategy {
 	
 	public static void main(String[] args){
 		
-		List<String> l = Collections.synchronizedList(new ArrayList<String>());
-		l.add(null);
-		l.add(null);
-		l.add("1");
-		System.out.println(l.contains(null));
-		
+		Exchange exchange = EndExchangeFactory.newInstance("exx.com");
+		exchange.getDepth("HSR_QC");
 	}
 	
 }
