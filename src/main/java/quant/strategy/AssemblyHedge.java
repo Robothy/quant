@@ -14,6 +14,8 @@ import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
 
 import exunion.exchange.Exchange;
+import exunion.metaobjects.Account;
+import exunion.metaobjects.Account.Balance;
 import exunion.metaobjects.Depth;
 import exunion.metaobjects.Order;
 import exunion.metaobjects.OrderSide;
@@ -67,6 +69,9 @@ public class AssemblyHedge implements Strategy {
 	
 	// 已挂出的组合对冲单
 	private final List<AssemblyHedgeOrder> liveAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	
+	// 各币种账户余额
+	private final Map<HedgeCurrencyPair, BigDecimal> hedgeCurrencyBanances = new HashMap<AssemblyHedge.HedgeCurrencyPair, BigDecimal>();
 	
 	// 组合对冲币种对，即参与对冲组合的币种对，属性包括平台，币种对
 	private List<HedgeCurrencyPair> hedgeCurrencyPairs = null;
@@ -380,6 +385,24 @@ public class AssemblyHedge implements Strategy {
 	private Boolean updateHedgeOrders(final List<AssemblyHedgeOrder> liveHedgeOrders){
 		Boolean result = false;
 		return result;
+	}
+	
+	/**
+	 * 更新各个币种的可用余额
+	 * @return
+	 */
+	private Boolean updateBalances(){
+		for(HedgeCurrencyPair hedgeCurrencyPair : this.hedgeCurrencyPairs){
+			Exchange exchange = exchanges.get(hedgeCurrencyPair.getPlatform());
+			Account account = exchange.getAccount();
+			if(account == null){
+				logger.info("更新账户信息失败。");
+				return false;
+			}
+			
+			
+		}
+		return null;
 	}
 	
 	/**
