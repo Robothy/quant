@@ -71,8 +71,8 @@ public class AssemblyHedge implements Strategy {
 	private final List<AssemblyHedgeOrder> liveAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
 	
 	// 各币种账户余额
-	private final Map<HedgeCurrencyPair, BigDecimal> hedgeCurrencyBanances = new HashMap<AssemblyHedge.HedgeCurrencyPair, BigDecimal>();
-	
+	private final Map<String, Map<String, Balance>> hedgeCurrencyBanances = new HashMap<String, Map<String,Balance>>(); 
+			
 	// 组合对冲币种对，即参与对冲组合的币种对，属性包括平台，币种对
 	private List<HedgeCurrencyPair> hedgeCurrencyPairs = null;
 	
@@ -392,17 +392,25 @@ public class AssemblyHedge implements Strategy {
 	 * @return
 	 */
 	private Boolean updateBalances(){
+		logger.debug("准备更新账户余额。");
+		this.hedgeCurrencyBanances.clear();
 		for(HedgeCurrencyPair hedgeCurrencyPair : this.hedgeCurrencyPairs){
-			Exchange exchange = exchanges.get(hedgeCurrencyPair.getPlatform());
+			
+			String plantform = hedgeCurrencyPair.getPlatform();
+			// 此轮已经获取到了该平台各币种的余额
+			if(this.hedgeCurrencyBanances.containsKey(plantform)){
+				continue;
+			}
+			Exchange exchange = exchanges.get(plantform);
 			Account account = exchange.getAccount();
 			if(account == null){
 				logger.info("更新账户信息失败。");
 				return false;
 			}
-			
-			
+			hedgeCurrencyBanances.put(plantform, account.getBalances());
 		}
-		return null;
+		logger.debug("账户余额更新完成。");
+		return true;
 	}
 	
 	/**
