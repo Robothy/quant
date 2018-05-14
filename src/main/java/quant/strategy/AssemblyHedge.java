@@ -556,8 +556,11 @@ public class AssemblyHedge implements Strategy {
 	public static void main(String[] args){
 		
 		Exchange exchange = EndExchangeFactory.newInstance("exx.com");
-		System.out.println(exchange.getDepth("HSR_QC"));
-		
+		System.out.println(exchange.getDepth("ETH_QC"));
+		exchange = EndExchangeFactory.newInstance("zb.com");
+		System.out.println(exchange.getDepth("ETH_QC"));
+		//System.out.println(exchange.getDepth("BTC_QC"));
+		//System.out.println(exchange.getDepth("HSR_BTC"));
 	}
 	
 }
