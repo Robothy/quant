@@ -40,6 +40,12 @@ public class AssemblyHedge implements Strategy {
 	public static class HedgeCurrencyPair{
 		private String plantfrom = null;
 		private String currencyPair = null;
+		
+		public HedgeCurrencyPair(String plantform, String currencyPair){
+			this.plantfrom = plantform;
+			this.currencyPair = currencyPair;
+		}
+		
 		public String getCurrencyPair() {
 			return currencyPair;
 		}
@@ -92,8 +98,9 @@ public class AssemblyHedge implements Strategy {
 	 * 组合对冲币种对，即参与对冲组合的币种对，属性包括平台，币种对
 	 * @param hedgeCurrencyPairs 组合对冲币种对
 	 */
-	public void setHedgeCurrencyPairs(List<HedgeCurrencyPair> hedgeCurrencyPairs) {
+	public AssemblyHedge setHedgeCurrencyPairs(List<HedgeCurrencyPair> hedgeCurrencyPairs) {
 		this.hedgeCurrencyPairs = hedgeCurrencyPairs;
+		return this;
 	}
 
 	// 交易所实例
@@ -169,8 +176,9 @@ public class AssemblyHedge implements Strategy {
 	 * 即在获取行情数据时，交易所必须在此时间之内返回行情数据，否则认为获取到的数据无效
 	 * @param marketAvailableDuration 市场有效时间，默认值 500
 	 */
-	public void setMarketAvailableDuration(Long marketAvailableDuration) {
+	public AssemblyHedge setMarketAvailableDuration(Long marketAvailableDuration) {
 		this.marketAvailableDuration = marketAvailableDuration;
+		return this;
 	}
 
 	
@@ -425,38 +433,35 @@ public class AssemblyHedge implements Strategy {
 		logger.debug("准备下计划单 ...");
 		// 遍历计划单，下满足条件的单
 		for(AssemblyHedgeOrder hedgeOrder : planHedgeOrders){
-			for(Entry<HedgeCurrencyPair, Depth> dep : depth.entrySet()){
-				if(hedgeOrder.getPlantfrom().equals(dep.getKey().getPlatform())
-						&& hedgeOrder.getCurrency().equals(dep.getKey().getCurrencyPair())){
-					
-					if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
-						BigDecimal sell1Price = dep.getValue().getAsks().get(0).getPrice();
-						// 卖一价小于买单的买价
-						if(sell1Price.compareTo(hedgeOrder.getOrderPrice()) < 0){
-							this.order(hedgeOrder);
-						}
-					}else if(OrderSide.SELL.equals(hedgeOrder.getOrderSide())){
-						BigDecimal buy1Price = dep.getValue().getBids().get(0).getPrice();
-						// 买一价大于卖单的卖价
-						if(buy1Price.compareTo(hedgeOrder.getOrderPrice()) > 0){
-							this.order(hedgeOrder);
-						}
-					}else{
-						logger.warn("对冲单的方向不正确。");
+			depth.entrySet().stream()
+			.filter( e-> hedgeOrder.getPlantfrom().equals(e.getKey().getPlatform()) && hedgeOrder.getCurrency().equals(e.getKey().getCurrencyPair()))
+			.forEach(dep -> {
+				if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
+					BigDecimal sell1Price = dep.getValue().getAsks().get(0).getPrice();
+					// 卖一价小于买单的买价
+					if(sell1Price.compareTo(hedgeOrder.getOrderPrice()) < 0){
+						this.order(hedgeOrder);
 					}
-					
-					// 订单的状态不再为 PLAN, 同步数据库，并将对象由 playHedgeOrders 移动到 liveHedgeOrders 中。
-					if(!"PLAN".equals(hedgeOrder.getOrderStatus())){
-						logger.debug("计划单[exchange={},currency={}, side={}, price={}, quantity={}]下单成功。",
-								hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderSide(),
-								hedgeOrder.getOrderPrice(), hedgeOrder.getOrderQuantity());
-						commonDao.saveOrUpdate(hedgeOrder);
-						liveHedgeOrders.add(hedgeOrder);
-						planHedgeOrders.remove(hedgeOrder);
+				}else if(OrderSide.SELL.equals(hedgeOrder.getOrderSide())){
+					BigDecimal buy1Price = dep.getValue().getBids().get(0).getPrice();
+					// 买一价大于卖单的卖价
+					if(buy1Price.compareTo(hedgeOrder.getOrderPrice()) > 0){
+						this.order(hedgeOrder);
 					}
-					
+				}else{
+					logger.warn("对冲单的方向不正确。");
 				}
-			}
+				
+				// 订单的状态不再为 PLAN, 同步数据库，并将对象由 playHedgeOrders 移动到 liveHedgeOrders 中。
+				if(!"PLAN".equals(hedgeOrder.getOrderStatus())){
+					logger.debug("计划单[exchange={},currency={}, side={}, price={}, quantity={}]下单成功。",
+							hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderSide(),
+							hedgeOrder.getOrderPrice(), hedgeOrder.getOrderQuantity());
+					commonDao.saveOrUpdate(hedgeOrder);
+					liveHedgeOrders.add(hedgeOrder);
+					planHedgeOrders.remove(hedgeOrder);
+				}
+			});
 		}
 		logger.debug("下计划单完成。");
 		return null;
@@ -524,7 +529,7 @@ public class AssemblyHedge implements Strategy {
 			
 			// 更新挂单状态
 			if(!updateHedgeOrders(this.liveAssemblyHedgeOrders)){
-				logger.error("更新挂单信息失败，将在 {} 秒后进行下一轮操作。", failedSleepTime / 60);
+				logger.error("更新挂单信息失败，将在 {} 秒后进行下一轮操作。", failedSleepTime / 1000);
 				delay(failedSleepTime);
 				continue;
 			}
@@ -532,7 +537,7 @@ public class AssemblyHedge implements Strategy {
 			// 获取深度信息
 			Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth = getHedgeCurrencyPairDepth();
 			if(null == hedgeCurrencyPairDepth){ // 获取深度信息失败
-				logger.error("获取深度信息失败, 将在 {} 秒后进行下一轮操作。", failedSleepTime / 60);
+				logger.error("获取深度信息失败, 将在 {} 秒后进行下一轮操作。", failedSleepTime / 1000);
 				delay(failedSleepTime);
 				continue;
 			}
@@ -555,12 +560,18 @@ public class AssemblyHedge implements Strategy {
 	
 	public static void main(String[] args){
 		
-		Exchange exchange = EndExchangeFactory.newInstance("exx.com");
-		System.out.println(exchange.getDepth("ETH_QC"));
-		exchange = EndExchangeFactory.newInstance("zb.com");
-		System.out.println(exchange.getDepth("ETH_QC"));
-		//System.out.println(exchange.getDepth("BTC_QC"));
-		//System.out.println(exchange.getDepth("HSR_BTC"));
+		List<HedgeCurrencyPair> hedgeCurrencyPairs = new ArrayList<>();
+		hedgeCurrencyPairs.add(new HedgeCurrencyPair("exx.com", "HSR_QC"));
+		hedgeCurrencyPairs.add(new HedgeCurrencyPair("zb.com", "HSR_QC"));
+		
+		
+		new AssemblyHedge()
+		.setCycle(5000L)
+		.setFailedSleepTime(30000L)
+		.setHedgeCurrencyPairs(hedgeCurrencyPairs)
+		.setMarketAvailableDuration(2000L)
+		.setMaxPlanOrderNumber(10)
+		.run(null);
 	}
 	
 }
