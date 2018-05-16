@@ -20,6 +20,7 @@ import exunion.metaobjects.Depth;
 import exunion.metaobjects.Order;
 import exunion.metaobjects.OrderSide;
 import exunion.metaobjects.OrderStatus;
+import javafx.collections.transformation.SortedList;
 import quant.dao.CommonDao;
 import quant.entity.AssemblyHedgeOrder;
 import quant.exchange.EndExchangeFactory;
@@ -71,10 +72,10 @@ public class AssemblyHedge implements Strategy {
 	private final CommonDao commonDao = new CommonDao();
 	
 	// 计划组合对冲单
-	private final List<AssemblyHedgeOrder> planAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	private final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> planAssemblyHedgeOrders = new HashMap<>();
 	
 	// 已挂出的组合对冲单
-	private final List<AssemblyHedgeOrder> liveAssemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	private final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders = new HashMap<>();
 	
 	// 各币种账户余额
 	private final Map<String, Map<String, Balance>> hedgeCurrencyBalances = new HashMap<String, Map<String,Balance>>(); 
@@ -248,15 +249,19 @@ public class AssemblyHedge implements Strategy {
 	private Boolean init(){
 		// 构建交易所实例
 		if (null == exchanges){
-			exchanges = new HashMap<String, Exchange>();
-			for (HedgeCurrencyPair hedgeCurrencyPair : hedgeCurrencyPairs){
-				String plantform = hedgeCurrencyPair.getPlatform();
-				if(exchanges.containsKey(plantform)){
-					continue;
-				}
-				Exchange ex = EndExchangeFactory.newInstance(plantform);
-				exchanges.put(plantform, ex);
-			}
+			this.exchanges = new HashMap<String, Exchange>();
+			
+			// 实例化计划对冲单和进行中的对冲单
+			this.hedgeCurrencyPairs.stream()
+			.forEach(e -> {
+				this.planAssemblyHedgeOrders.put(e, new ArrayList<>());
+				this.liveAssemblyHedgeOrders.put(e, new ArrayList<>());
+			});
+			
+			// 获取用到的交易所的实例
+			this.hedgeCurrencyPairs.stream()
+			.filter(e -> !exchanges.containsKey(e.getPlatform()))
+			.forEach(e -> exchanges.put(e.getPlatform() , EndExchangeFactory.newInstance(e.getPlatform())));
 		}
 		return true;
 	}
@@ -387,10 +392,10 @@ public class AssemblyHedge implements Strategy {
 	 * 更新订单时只需要两端开始查询更新即可，因为挂单总是优先成交最高价的买单和最低价的卖单。
 	 * 特殊情况是跨两个平台，买价高于卖价，这种情况比较少见，这里认为不可能出现此情况。
 	 * 
-	 * @param liveHedgeOrders 进行中的订单 
+	 * @param liveAssemblyHedgeOrders2 进行中的订单 
 	 * @return true - 更新成功； false - 更新失败
 	 */
-	private Boolean updateHedgeOrders(final List<AssemblyHedgeOrder> liveHedgeOrders){
+	private Boolean updateHedgeOrders(final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders2){
 		Boolean result = false;
 		return result;
 	}
@@ -422,17 +427,48 @@ public class AssemblyHedge implements Strategy {
 	}
 	
 	/**
-	 * 根据深度信息下计划订单
-	 * <p> 对计划订单进行排序，排序规则同上。
-	 * <p> 一次性仅下一个订单(一个卖单或者一个买单)，下单之后，返回挂单信息。 
-	 * @param planHedgeOrders
+	 * 根据深度信息下计划订单。
+	 * <p> 根据深度信息，若买一价大于计划单的卖价，则下卖单；若卖一价小于计划单的买价，则下买单。
+	 * <p> 一次做多下一个买单，最多下一个卖单。
+	 * @param depths 深度信息
+	 * @param planAssemblyHedgeOrders 经过排序的计划对冲单
+	 * @param liveAssemblyHedgeOrders 进行中的计划对冲单
+	 * 
 	 */
-	private AssemblyHedgeOrder placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depth,
-			final List<AssemblyHedgeOrder> planHedgeOrders, 
-			final List<AssemblyHedgeOrder> liveHedgeOrders){
+	private void placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depths,
+			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> planAssemblyHedgeOrders, 
+			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders){
 		logger.debug("准备下计划单 ...");
+		this.hedgeCurrencyPairs.parallelStream()
+		.forEach(currencyPair -> {
+			
+			Depth depth = depths.get(currencyPair);
+			BigDecimal buy1Price = depth.getBids().get(0).getPrice();
+			BigDecimal sell1Price = depth.getAsks().get(0).getPrice();
+			List<AssemblyHedgeOrder> planHedgeOrders = planAssemblyHedgeOrders.get(currencyPair);
+			List<AssemblyHedgeOrder> liveHedgeOrders = liveAssemblyHedgeOrders.get(currencyPair);
+			
+			int size = planHedgeOrders.size();
+			
+			// 下计划买单，第一个元素是最高价的买单，
+			if(size>0 && OrderSide.BUY.equals(planHedgeOrders.get(0).getOrderSide())){
+				
+			}
+			else if(size>0 && OrderSide.SELL.equals(planHedgeOrders.get(size - 1).getOrderSide())){
+				
+			}
+			
+			
+			
+			
+			
+			
+		});
+		
+		
+		
 		// 遍历计划单，下满足条件的单
-		for(AssemblyHedgeOrder hedgeOrder : planHedgeOrders){
+		for(AssemblyHedgeOrder hedgeOrder : planAssemblyHedgeOrders2){
 			depth.entrySet().stream()
 			.filter( e-> hedgeOrder.getPlantfrom().equals(e.getKey().getPlatform()) && hedgeOrder.getCurrency().equals(e.getKey().getCurrencyPair()))
 			.forEach(dep -> {
@@ -458,8 +494,8 @@ public class AssemblyHedge implements Strategy {
 							hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderSide(),
 							hedgeOrder.getOrderPrice(), hedgeOrder.getOrderQuantity());
 					commonDao.saveOrUpdate(hedgeOrder);
-					liveHedgeOrders.add(hedgeOrder);
-					planHedgeOrders.remove(hedgeOrder);
+					liveAssemblyHedgeOrders2.add(hedgeOrder);
+					planAssemblyHedgeOrders2.remove(hedgeOrder);
 				}
 			});
 		}
