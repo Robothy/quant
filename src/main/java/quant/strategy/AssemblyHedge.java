@@ -370,7 +370,6 @@ public class AssemblyHedge implements Strategy {
 	 * @return true - 更新成功； false - 更新失败
 	 */
 	private Boolean updateHedgeOrders(final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders){
-		Boolean result = false;
 		for(Entry<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrder : liveAssemblyHedgeOrders.entrySet()){
 			HedgeCurrencyPair currencyPair = liveAssemblyHedgeOrder.getKey();
 			List<AssemblyHedgeOrder> assemblyHedgeOrders = liveAssemblyHedgeOrder.getValue();
@@ -379,7 +378,7 @@ public class AssemblyHedge implements Strategy {
 			// 更新买单信息
 			for(int i=0; i<assemblyHedgeOrders.size(); i++){
 				AssemblyHedgeOrder hedgeOrder = assemblyHedgeOrders.get(i);
-				String 
+				String previousStatus = hedgeOrder.getOrderStatus();
 				if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
 					break;
 				}
@@ -390,7 +389,10 @@ public class AssemblyHedge implements Strategy {
 					return false;
 				}
 				
-				
+				// 订单状态发生了改变
+				if(!previousStatus.equals(order.getStatus()) || OrderStatus.FILLED.equals(order.getStatus())){
+					//TODO 订单改变之后的操作
+				}
 				
 			}
 			
@@ -398,7 +400,7 @@ public class AssemblyHedge implements Strategy {
 			
 			
 		}
-		return result;
+		return true;
 	}
 	
 	/**
