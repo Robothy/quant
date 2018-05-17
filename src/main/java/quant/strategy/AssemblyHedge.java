@@ -59,6 +59,9 @@ public class AssemblyHedge implements Strategy {
 		public void setPlatform(String platform) {
 			this.plantfrom = platform;
 		}
+		public String toString(){
+			return "(" + this.plantfrom + ", " + currencyPair + ")";
+		}
 	}
 	
 	/*****************************************************************
@@ -310,52 +313,23 @@ public class AssemblyHedge implements Strategy {
 	 * @param hedgeCurrencyPairDepth 对冲币种对的深度信息
 	 * @return 计算得到组合对冲订单，若无对冲机会，则返回 null
 	 */
-	private List<AssemblyHedgeOrder> CalculateAssemblyHedgeOrder(Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth){
-		List<AssemblyHedgeOrder> assemblyHedgeOrders = new ArrayList<AssemblyHedgeOrder>();
+	private Map<HedgeCurrencyPair, AssemblyHedgeOrder> CalculateAssemblyHedgeOrder(Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth){
+		Map<HedgeCurrencyPair, AssemblyHedgeOrder> assemblyHedgeOrders = new HashMap<>();
 		
 		return assemblyHedgeOrders;
 	}
-	
+
 	/**
 	 * 根据对冲订单组合挂单
-	 * @param assemblyHedgeOrders 对冲组合订单
-	 * @return 订单信息
+	 * @param assemblyHedgeOrders
+	 * @return 进行挂单操作之后的组合单，若所有的组合单均挂单失败，则直接清空组合单。
 	 */
-	private List<AssemblyHedgeOrder> order(List<AssemblyHedgeOrder> assemblyHedgeOrders){
-		final List<AssemblyHedgeOrder> hedgeOrders = Collections.synchronizedList(new ArrayList<AssemblyHedgeOrder>());
-		
-		// 并发下订单
-		for(final AssemblyHedgeOrder assemblyHedgeOrder: assemblyHedgeOrders){
-			
-			new Thread(new Runnable() {
-				public void run() {
-					AssemblyHedgeOrder hedgeOrder = order(assemblyHedgeOrder);
-					hedgeOrders.add(hedgeOrder);
-				}
-			}).start();
-			
+	private Map<HedgeCurrencyPair, AssemblyHedgeOrder> order(final Map<HedgeCurrencyPair, AssemblyHedgeOrder> assemblyHedgeOrders){
+		assemblyHedgeOrders.entrySet().parallelStream().forEach(e -> new Thread(()->order(e.getValue())).start());
+		if(0 == assemblyHedgeOrders.entrySet().stream().filter(e->!"PLAN".equals(e.getValue().getOrderStatus())).count()){
+			assemblyHedgeOrders.clear();
 		}
-
-		// 等待下单完成
-		while(assemblyHedgeOrders.size()!=hedgeOrders.size()){
-			delay(10L);
-		}
-		
-		// 判断是否所有的订单都下单失败了，即所有订单的状态都是 PLAN
-		// 若对冲组合中存在下单成功的订单，则失败的订单的状态变为 PLAN，日后伺机下单
-		Boolean allOrdersArePlan = true;
-		for(AssemblyHedgeOrder hedgeOrder : hedgeOrders){
-			if(!"PLAN".equals(hedgeOrder.getOrderStatus())){
-				allOrdersArePlan = false;				
-				break;
-			}
-		}
-		// 若所有的订单都挂单失败了，则表示此轮对冲组合无效，则直接清空此轮的订单
-		if(allOrdersArePlan){
-			hedgeOrders.clear();
-		}
-		
-		return hedgeOrders;
+		return assemblyHedgeOrders;
 	}
 	
 	/**
@@ -395,8 +369,35 @@ public class AssemblyHedge implements Strategy {
 	 * @param liveAssemblyHedgeOrders2 进行中的订单 
 	 * @return true - 更新成功； false - 更新失败
 	 */
-	private Boolean updateHedgeOrders(final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders2){
+	private Boolean updateHedgeOrders(final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders){
 		Boolean result = false;
+		for(Entry<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrder : liveAssemblyHedgeOrders.entrySet()){
+			HedgeCurrencyPair currencyPair = liveAssemblyHedgeOrder.getKey();
+			List<AssemblyHedgeOrder> assemblyHedgeOrders = liveAssemblyHedgeOrder.getValue();
+			Collections.sort(assemblyHedgeOrders, this.hedgeOrderOrderingRule);
+			Exchange exchange = this.exchanges.get(currencyPair);
+			// 更新买单信息
+			for(int i=0; i<assemblyHedgeOrders.size(); i++){
+				AssemblyHedgeOrder hedgeOrder = assemblyHedgeOrders.get(i);
+				String 
+				if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
+					break;
+				}
+				
+				Order order = exchange.getOrder(hedgeOrder.getCurrency(), hedgeOrder.getOrderId());
+				if(null == order){
+					logger.error("获取订单(plantform=,{}, currency={}, orderId={})信息时失败。", hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderId());
+					return false;
+				}
+				
+				
+				
+			}
+			
+			// 更新卖单信息
+			
+			
+		}
 		return result;
 	}
 	
@@ -435,13 +436,13 @@ public class AssemblyHedge implements Strategy {
 	 * @param liveAssemblyHedgeOrders 进行中的计划对冲单
 	 * 
 	 */
-	private void placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depths,
+	private Boolean placePlanHedgeOrders(final Map<HedgeCurrencyPair, Depth> depths,
 			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> planAssemblyHedgeOrders, 
 			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders){
 		logger.debug("准备下计划单 ...");
-		this.hedgeCurrencyPairs.parallelStream()
-		.forEach(currencyPair -> {
-			
+		boolean isPlacedPlanOrders = false; // 是否下了计划订单标志
+		
+		for(HedgeCurrencyPair currencyPair : this.hedgeCurrencyPairs){
 			Depth depth = depths.get(currencyPair);
 			BigDecimal buy1Price = depth.getBids().get(0).getPrice();
 			BigDecimal sell1Price = depth.getAsks().get(0).getPrice();
@@ -450,57 +451,47 @@ public class AssemblyHedge implements Strategy {
 			
 			int size = planHedgeOrders.size();
 			
-			// 下计划买单，第一个元素是最高价的买单，
+			AssemblyHedgeOrder maxPriceBuyOrder = null;
+			AssemblyHedgeOrder minPriceSellOrder = null;
+			
+			// 尝试获取最高价的计划买单
 			if(size>0 && OrderSide.BUY.equals(planHedgeOrders.get(0).getOrderSide())){
-				
-			}
-			else if(size>0 && OrderSide.SELL.equals(planHedgeOrders.get(size - 1).getOrderSide())){
-				
+				maxPriceBuyOrder = planHedgeOrders.get(0);
 			}
 			
+			// 尝试获取最低价的计划卖单
+			if(size>0 && OrderSide.SELL.equals(planHedgeOrders.get(size - 1).getOrderSide())){
+				minPriceSellOrder = planHedgeOrders.get(size - 1);
+			}
 			
-			
-			
-			
-			
-		});
-		
-		
-		
-		// 遍历计划单，下满足条件的单
-		for(AssemblyHedgeOrder hedgeOrder : planAssemblyHedgeOrders2){
-			depth.entrySet().stream()
-			.filter( e-> hedgeOrder.getPlantfrom().equals(e.getKey().getPlatform()) && hedgeOrder.getCurrency().equals(e.getKey().getCurrencyPair()))
-			.forEach(dep -> {
-				if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
-					BigDecimal sell1Price = dep.getValue().getAsks().get(0).getPrice();
-					// 卖一价小于买单的买价
-					if(sell1Price.compareTo(hedgeOrder.getOrderPrice()) < 0){
-						this.order(hedgeOrder);
-					}
-				}else if(OrderSide.SELL.equals(hedgeOrder.getOrderSide())){
-					BigDecimal buy1Price = dep.getValue().getBids().get(0).getPrice();
-					// 买一价大于卖单的卖价
-					if(buy1Price.compareTo(hedgeOrder.getOrderPrice()) > 0){
-						this.order(hedgeOrder);
-					}
-				}else{
-					logger.warn("对冲单的方向不正确。");
+			// 最高价的计划买单的价格高于卖一价，符合下单条件。
+			if(null != maxPriceBuyOrder && maxPriceBuyOrder.getOrderPrice().compareTo(sell1Price)>0){
+				this.order(maxPriceBuyOrder);
+				// 挂单的状态发生了变化，表示下单成功了。
+				if(!"PLAN".equals(maxPriceBuyOrder.getOrderStatus())){
+					logger.debug("{}最高价计划买单价格: {}, 卖一价: {},计划买单下单成功。", currencyPair, maxPriceBuyOrder.getOrderPrice(), sell1Price);
+					new Thread(()->commonDao.saveOrUpdate(planHedgeOrders.get(0))).start();
+					liveHedgeOrders.add(maxPriceBuyOrder);
+					planHedgeOrders.remove(0);
+					isPlacedPlanOrders = true;
 				}
-				
-				// 订单的状态不再为 PLAN, 同步数据库，并将对象由 playHedgeOrders 移动到 liveHedgeOrders 中。
-				if(!"PLAN".equals(hedgeOrder.getOrderStatus())){
-					logger.debug("计划单[exchange={},currency={}, side={}, price={}, quantity={}]下单成功。",
-							hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderSide(),
-							hedgeOrder.getOrderPrice(), hedgeOrder.getOrderQuantity());
-					commonDao.saveOrUpdate(hedgeOrder);
-					liveAssemblyHedgeOrders2.add(hedgeOrder);
-					planAssemblyHedgeOrders2.remove(hedgeOrder);
+			}
+			
+			//最低价的计划卖单的价格低于买一价，符合下单条件。 这里使用 else if 是由于此条件与上面的条件不可能同时满足。
+			else if(null != minPriceSellOrder && minPriceSellOrder.getOrderPrice().compareTo(buy1Price) < 0){
+				this.order(minPriceSellOrder);
+				if(!"PLAN".equals(minPriceSellOrder.getOrderStatus())){
+					logger.debug("{}最低价计划卖单价格： {}, 买一价： {},计划卖单下单成功。",currencyPair, minPriceSellOrder.getOrderPrice(), buy1Price);
+					new Thread(()->commonDao.saveOrUpdate(planHedgeOrders.get(size - 1))).start();
+					liveHedgeOrders.add(minPriceSellOrder);
+					planHedgeOrders.remove(size - 1);
+					isPlacedPlanOrders = true;
 				}
-			});
+			}
 		}
+		
 		logger.debug("下计划单完成。");
-		return null;
+		return isPlacedPlanOrders;
 	}
 	
 	/**
@@ -508,24 +499,24 @@ public class AssemblyHedge implements Strategy {
 	 * @return
 	 */
 	private void placeHedgeOrders(final Map<HedgeCurrencyPair, Depth> currencyPairDepth,
-			final List<AssemblyHedgeOrder> planHedgeOrders, 
-			final List<AssemblyHedgeOrder> liveHedgeOrders){
+			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> planHedgeOrders, 
+			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveHedgeOrders){
 		
 		// 计算组合单
-		List<AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(currencyPairDepth);
+		Map<HedgeCurrencyPair, AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(currencyPairDepth);
 		if(0 == assemblyHedgeOrders.size()){
 			logger.info("没有组合对冲交易机会。");
 		}else{
 			// 挂组合单
-			List<AssemblyHedgeOrder> hedgeOrders = order(assemblyHedgeOrders);
-			for(AssemblyHedgeOrder hedgeOrder : hedgeOrders){
-				if("PLAN".equals(hedgeOrder.getOrderStatus())){
-					liveHedgeOrders.add(hedgeOrder);
+			Map<HedgeCurrencyPair, AssemblyHedgeOrder> hedgeOrders = order(assemblyHedgeOrders);
+			for(Entry<HedgeCurrencyPair, AssemblyHedgeOrder> hedgeOrder : hedgeOrders.entrySet()){
+				if("PLAN".equals(hedgeOrder.getValue().getOrderStatus())){
+					planHedgeOrders.get(hedgeOrder.getKey()).add(hedgeOrder.getValue());
 				}else{
-					planHedgeOrders.add(hedgeOrder);
+					liveHedgeOrders.get(hedgeOrder.getKey()).add(hedgeOrder.getValue());;
 				}
 			}
-			this.commonDao.saveOrUpdate(hedgeOrders);
+			hedgeOrders.entrySet().parallelStream().forEach(e->commonDao.saveOrUpdate(e.getValue()));
 		}
 	}
 	
@@ -579,9 +570,9 @@ public class AssemblyHedge implements Strategy {
 			}
 			
 			// 优先下计划订单
-			AssemblyHedgeOrder planOrder = this.placePlanHedgeOrders(hedgeCurrencyPairDepth, this.planAssemblyHedgeOrders, this.liveAssemblyHedgeOrders);
-			if(planOrder != null){
-				logger.debug("下计划单成功。");
+			Boolean isPlacedPlanOrders = this.placePlanHedgeOrders(hedgeCurrencyPairDepth, this.planAssemblyHedgeOrders, this.liveAssemblyHedgeOrders); 
+			// 已经下了计划订单，考虑到对市场的影响，不再进行后续操作，直接进入下一轮。
+			if(isPlacedPlanOrders){
 				continue;
 			}
 			
