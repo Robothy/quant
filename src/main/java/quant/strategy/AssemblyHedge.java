@@ -274,38 +274,38 @@ public class AssemblyHedge implements Strategy {
 	 * @return 对冲交易对的深度信息，若未能成功获取其中某个对冲交易对的信息，则返回 null。
 	 */
 	private Map<HedgeCurrencyPair, Depth> getHedgeCurrencyPairDepth(){
-		final Map<HedgeCurrencyPair, Depth> result = new ConcurrentHashMap<AssemblyHedge.HedgeCurrencyPair, Depth>();
 		
-		for (final HedgeCurrencyPair hedgeCurrencyPair : hedgeCurrencyPairs){
+		logger.debug("开始获取深度信息 ...");
+		Map<HedgeCurrencyPair, Depth> result = new ConcurrentHashMap<AssemblyHedge.HedgeCurrencyPair, Depth>();
+		
+		Long begin = System.currentTimeMillis();
+		this.hedgeCurrencyPairs.parallelStream().forEach(hedgeCurrencyPair -> {
 			final Exchange exchange = exchanges.get(hedgeCurrencyPair.getPlatform());
-			new Thread(new Runnable() {
-				public void run() {
-					Depth depth = exchange.getDepth(hedgeCurrencyPair.getCurrencyPair());
-					if(null != depth){
-						result.put(hedgeCurrencyPair, depth);
-					}
-				}
-			}).start();
+			Depth depth = exchange.getDepth(hedgeCurrencyPair.getCurrencyPair());
+			if(depth != null){
+				result.put(hedgeCurrencyPair, depth);
+			}
+		} );
+		Long end = System.currentTimeMillis();
+		Long duration = end - begin;
+		
+		logger.debug(result);
+		
+		if(duration > this.marketAvailableDuration){
+			logger.warn("获取深度信息的时间{}ms超过了市场有效时间{}ms。", duration, this.marketAvailableDuration);
+			return null;
 		}
 		
-		// 判断是否获取到各币种的深度信息
-		// 每10ms查询一次，直到达到最大次数或者该获取的行情信息都获取到了则退出循环
-		Long maxCycleTimes = (marketAvailableDuration - (marketAvailableDuration % 10)) / 10;
-		Long i = 0L;
-		Boolean isGetAllDepth = false;
-		while(i++ < maxCycleTimes){
-			delay(10L);
-			if(result.size() == hedgeCurrencyPairs.size()){
-				isGetAllDepth = true;
-				break;
+		if(this.hedgeCurrencyPairs.size() != result.size()){
+			for(HedgeCurrencyPair hedgeCurrencyPair : this.hedgeCurrencyPairs){
+				if(result.containsKey(hedgeCurrencyPair)){
+					continue;
+				}
+				logger.error("未能获取{}的深度信息。", hedgeCurrencyPair);				
 			}
 		}
-		
-		// 获取到了所有的行情信息
-		if(isGetAllDepth){
-			return result;			
-		}
-		return null;
+		logger.debug("深度信息获取完成 ...");
+		return result;
 	}
 	
 	/**
@@ -370,6 +370,7 @@ public class AssemblyHedge implements Strategy {
 	 * @return true - 更新成功； false - 更新失败
 	 */
 	private Boolean updateHedgeOrders(final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrders){
+		logger.debug("准备更新挂单信息 ...");
 		for(Entry<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveAssemblyHedgeOrder : liveAssemblyHedgeOrders.entrySet()){
 			HedgeCurrencyPair currencyPair = liveAssemblyHedgeOrder.getKey();
 			List<AssemblyHedgeOrder> assemblyHedgeOrders = liveAssemblyHedgeOrder.getValue();
@@ -378,8 +379,8 @@ public class AssemblyHedge implements Strategy {
 			// 更新买单信息
 			for(int i=0; i<assemblyHedgeOrders.size(); i++){
 				AssemblyHedgeOrder hedgeOrder = assemblyHedgeOrders.get(i);
-				String previousStatus = hedgeOrder.getOrderStatus();
-				if(OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
+				// 第一个订单不是买单，直接跳出
+				if(!OrderSide.BUY.equals(hedgeOrder.getOrderSide())){
 					break;
 				}
 				
@@ -389,17 +390,45 @@ public class AssemblyHedge implements Strategy {
 					return false;
 				}
 				
+				String previousStatus = hedgeOrder.getOrderStatus();
 				// 订单状态发生了改变
 				if(!previousStatus.equals(order.getStatus()) || OrderStatus.FILLED.equals(order.getStatus())){
-					//TODO 订单改变之后的操作
+					hedgeOrder.setOrderStatus(order.getStatus());
+					hedgeOrder.setTransPrice(order.getPrice());
+					commonDao.saveOrUpdate(hedgeOrder);
 				}
-				
+				// 若价格高的买单状态都发生改变，那价格低的买单肯定也未发生改变，直接跳出循环，不再检查价格低的买单
+				else{
+					break;
+				}
 			}
 			
 			// 更新卖单信息
-			
-			
+			for(int i=assemblyHedgeOrders.size() - 1; i>0; i++){
+				AssemblyHedgeOrder hedgeOrder = assemblyHedgeOrders.get(i);
+				
+				// 最后一个单不是卖单，直接跳出
+				if(!OrderSide.SELL.equals(hedgeOrder.getOrderSide())){
+					break;
+				}
+				
+				Order order = exchange.getOrder(hedgeOrder.getCurrency(), hedgeOrder.getOrderId());
+				if(null == order){
+					logger.error("获取订单(plantform=,{}, currency={}, orderId={})信息时失败。", hedgeOrder.getPlantfrom(), hedgeOrder.getCurrency(), hedgeOrder.getOrderId());
+					return false;
+				}
+				
+				String previoursStatus = hedgeOrder.getOrderStatus();
+				if(!previoursStatus.equals(order.getStatus()) || OrderStatus.FILLED.equals(order.getStatus())){
+					hedgeOrder.setOrderStatus(order.getStatus());
+					hedgeOrder.setTransPrice(order.getPrice());
+					commonDao.saveOrUpdate(hedgeOrder);
+				}else{
+					break;
+				}
+			}
 		}
+		logger.debug("挂单信息更新完成。");
 		return true;
 	}
 	
@@ -503,7 +532,7 @@ public class AssemblyHedge implements Strategy {
 	private void placeHedgeOrders(final Map<HedgeCurrencyPair, Depth> currencyPairDepth,
 			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> planHedgeOrders, 
 			final Map<HedgeCurrencyPair, List<AssemblyHedgeOrder>> liveHedgeOrders){
-		
+		logger.debug("准备挂对冲单 ...");
 		// 计算组合单
 		Map<HedgeCurrencyPair, AssemblyHedgeOrder> assemblyHedgeOrders = this.CalculateAssemblyHedgeOrder(currencyPairDepth);
 		if(0 == assemblyHedgeOrders.size()){
@@ -520,6 +549,7 @@ public class AssemblyHedge implements Strategy {
 			}
 			hedgeOrders.entrySet().parallelStream().forEach(e->commonDao.saveOrUpdate(e.getValue()));
 		}
+		logger.debug("对冲单挂单完成。");
 	}
 	
 	/**
@@ -580,7 +610,6 @@ public class AssemblyHedge implements Strategy {
 			
 			// 前面操作都 OK 了，开始下组合对冲单
 			this.placeHedgeOrders(hedgeCurrencyPairDepth, this.planAssemblyHedgeOrders, this.liveAssemblyHedgeOrders);
-			
 		}
 		
 	}
@@ -588,7 +617,7 @@ public class AssemblyHedge implements Strategy {
 	
 	
 	public static void main(String[] args){
-		
+		/*
 		List<HedgeCurrencyPair> hedgeCurrencyPairs = new ArrayList<>();
 		hedgeCurrencyPairs.add(new HedgeCurrencyPair("exx.com", "HSR_QC"));
 		hedgeCurrencyPairs.add(new HedgeCurrencyPair("zb.com", "HSR_QC"));
@@ -600,7 +629,11 @@ public class AssemblyHedge implements Strategy {
 		.setHedgeCurrencyPairs(hedgeCurrencyPairs)
 		.setMarketAvailableDuration(2000L)
 		.setMaxPlanOrderNumber(10)
-		.run(null);
+		.run(null);*/
+		
+		System.out.println(EndExchangeFactory.newInstance("bit-z.com").getOrder("eth_btc", "282971473"));
+		//System.out.println(EndExchangeFactory.newInstance("bit-z.com").getAccount());
+		
 	}
 	
 }
