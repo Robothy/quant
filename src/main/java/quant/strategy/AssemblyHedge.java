@@ -1,6 +1,7 @@
 package quant.strategy;
 
 import java.math.BigDecimal;
+import java.math.RoundingMode;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
@@ -16,6 +17,7 @@ import org.apache.logging.log4j.Logger;
 import exunion.exchange.Exchange;
 import exunion.metaobjects.Account;
 import exunion.metaobjects.Account.Balance;
+import exunion.metaobjects.Depth.PriceQuotation;
 import exunion.metaobjects.Depth;
 import exunion.metaobjects.Order;
 import exunion.metaobjects.OrderSide;
@@ -62,6 +64,24 @@ public class AssemblyHedge implements Strategy {
 		public String toString(){
 			return "(" + this.plantfrom + ", " + currencyPair + ")";
 		}
+	}
+	
+	/**
+	 * 对冲元素类
+	 * <p>
+	 * 这里认为一组对冲实际上由一个环构成，环上有节点，一个节点称为一个 #HedgeElement
+	 * @author robothy
+	 *
+	 */
+	private static class HedgeElement{
+		
+		private String exchange = null;
+		
+		private String orderType = null;
+		
+		private List<PriceQuotation> depth = null;
+		
+		
 	}
 	
 	/*****************************************************************
@@ -184,7 +204,6 @@ public class AssemblyHedge implements Strategy {
 		this.marketAvailableDuration = marketAvailableDuration;
 		return this;
 	}
-
 	
 	// 最大计划订单数
 	private Integer maxPlanOrderNumber = 5;
@@ -224,6 +243,81 @@ public class AssemblyHedge implements Strategy {
 		}
 	}; 
 	
+	/**
+	 * 交易手续费费率，姑且认为不同交易所的费率相同
+	 */
+	private BigDecimal feeRate = new BigDecimal("0.0021");
+	
+	/**
+	 * 这里认为不同交易所的费率相同
+	 * @return 交易手续费费率
+	 */
+	public BigDecimal getFeeRate(){
+		return feeRate;
+	}
+	
+	/**
+	 * 这里认为不同交易所的费率相同，这里为了避免除法产生尾差造成损失，手续费率可以稍微调高一点。
+	 * @param feeRate 交易手续费费率， 默认 0.0021
+	 * @return
+	 */
+	public AssemblyHedge setFeeRate(BigDecimal feeRate){
+		this.feeRate = feeRate;
+		return this;
+	}
+	
+	/**
+	 * 价格精度，小数点后的位数
+	 * 
+	 */
+	private Integer priceScale = null; 
+	
+	/**
+	 * 设置价格精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @param priceScale 价格精度
+	 * @return
+	 */
+	public AssemblyHedge setPriceScale(Integer priceScale){
+		this.priceScale = priceScale;
+		return this;
+	}
+	
+	/**
+	 * 获取价格精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @return 价格精度
+	 */
+	public Integer  getPriceScale(){
+		return this.priceScale;
+	}
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 */
+	private Integer quantityScale = null;
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @param quantityScale 量精度
+	 * @return
+	 */
+	public AssemblyHedge setQuantityScale(Integer quantityScale){
+		this.quantityScale = quantityScale;
+		return this;
+	}
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @return 量精度
+	 */
+	public Integer getQuantityScale(){
+		return this.quantityScale;
+	}
+	
+	/**
+	 * 常数 1
+	 */
+	private static final BigDecimal ONE = new BigDecimal("1");
+	
 	/*****************************************************************
 	 * 
 	 * 	私有方法定义
@@ -250,6 +344,7 @@ public class AssemblyHedge implements Strategy {
 	 * @return
 	 */
 	private Boolean init(){
+		logger.debug("开始构建交易所实例 ...");
 		// 构建交易所实例
 		if (null == exchanges){
 			this.exchanges = new HashMap<String, Exchange>();
@@ -266,6 +361,7 @@ public class AssemblyHedge implements Strategy {
 			.filter(e -> !exchanges.containsKey(e.getPlatform()))
 			.forEach(e -> exchanges.put(e.getPlatform() , EndExchangeFactory.newInstance(e.getPlatform())));
 		}
+		logger.debug("交易所实例构建完成。");
 		return true;
 	}
 	
@@ -301,7 +397,8 @@ public class AssemblyHedge implements Strategy {
 				if(result.containsKey(hedgeCurrencyPair)){
 					continue;
 				}
-				logger.error("未能获取{}的深度信息。", hedgeCurrencyPair);				
+				logger.error("未能获取{}的深度信息。", hedgeCurrencyPair);	
+				return null;
 			}
 		}
 		logger.debug("深度信息获取完成 ...");
@@ -316,9 +413,174 @@ public class AssemblyHedge implements Strategy {
 	private Map<HedgeCurrencyPair, AssemblyHedgeOrder> CalculateAssemblyHedgeOrder(Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth){
 		Map<HedgeCurrencyPair, AssemblyHedgeOrder> assemblyHedgeOrders = new HashMap<>();
 		
+		// 双币种搬砖套利
+		if(hedgeCurrencyPairs.size() == 2){
+			return CalculateDoubleAssemblyHedgeOrder(this.hedgeCurrencyPairs, hedgeCurrencyPairDepth, this.hedgeCurrencyBalances);
+		}
+		
+		
 		return assemblyHedgeOrders;
 	}
+	
+	/**
+	 * 双币种对套利，两个币种必须相同
+	 * @param hedgeCurrencyPairDepth
+	 * @param hedgeCurrencyBalances
+	 * @return
+	 */
+	private Map<HedgeCurrencyPair, AssemblyHedgeOrder> CalculateDoubleAssemblyHedgeOrder(List<HedgeCurrencyPair> hedgeCurrencyPairs,Map<HedgeCurrencyPair, Depth> hedgeCurrencyPairDepth, Map<String, Map<String, Balance>> hedgeCurrencyBalances){
+		
+		Map<HedgeCurrencyPair, AssemblyHedgeOrder> hedgeOrders = new HashMap<>();
+		
+		HedgeCurrencyPair mainExchangeCurrencyPair = hedgeCurrencyPairs.get(0);
+		HedgeCurrencyPair viceExchangeCurrencyPair = hedgeCurrencyPairs.get(1);
+		
+		String mainExchange = mainExchangeCurrencyPair.getPlatform(); // 主交易所名称
+		String viceExchange = viceExchangeCurrencyPair.getPlatform(); // 副交易所名称
+		
+		String mainCurrencyPair = mainExchangeCurrencyPair.getCurrencyPair(); // 主交易所币种对
+		String viceCurrencyPair = viceExchangeCurrencyPair.getCurrencyPair(); // 副交易所币种对
+		
+		String[] currencies = mainCurrencyPair.split("_");
+		String mainExchangeBaseCurrency = currencies[0]; // 主交易所基础货币
+		String mainExchangeQuoteCurrency = currencies[1]; // 主交易所计价货币
+		
+		currencies = viceCurrencyPair.split("_");
+		String viceExchangeBaseCurrency = currencies[0]; // 副交易所基础货币
+		String viceExchangeQuoteCurrency = currencies[1]; // 副交易所计价货币
+		
+		List<PriceQuotation> mainExchangeCurrencyPairAsks = hedgeCurrencyPairDepth.get(mainExchangeCurrencyPair).getAsks();
+		List<PriceQuotation> mainExchangeCurrencyPairBids = hedgeCurrencyPairDepth.get(mainExchangeCurrencyPair).getBids();
+		List<PriceQuotation> viceExchangeCurrencyPairAsks = hedgeCurrencyPairDepth.get(viceExchangeCurrencyPair).getAsks();
+		List<PriceQuotation> viceExchangeCurrencyPairBids = hedgeCurrencyPairDepth.get(viceExchangeCurrencyPair).getBids();
+		
+		// 主交易所与副交易所的币种对相同
+		if(mainExchangeBaseCurrency.equals(viceExchangeBaseCurrency) && mainExchangeQuoteCurrency.equals(viceExchangeQuoteCurrency)){
+			
+			BigDecimal mainCurrencyPairBuy1Price = mainExchangeCurrencyPairBids.get(0).getPrice();
+			BigDecimal mainCurrencyPairSell1Price = mainExchangeCurrencyPairAsks.get(0).getPrice();
 
+			BigDecimal viceCurrencyPairBuy1Price = viceExchangeCurrencyPairBids.get(0).getPrice();
+			BigDecimal viceCurrencyPairSell1Price = viceExchangeCurrencyPairAsks.get(0).getPrice();
+			
+			// 主交易所的买一价大于副交易所的卖一价，存在套利空间
+			if(mainCurrencyPairBuy1Price.compareTo(viceCurrencyPairSell1Price) > 0){
+				logger.debug("存在搬砖套利可能的。");
+				// 既然主交易所的买一价大于副交易所的卖一价，那么应该在主交易所卖出，副交易所买入
+				BigDecimal mainCurrencyPairSellQuantity = new BigDecimal("0");
+				BigDecimal mainCurrencyPairSellPrice = new BigDecimal("0");
+				BigDecimal viceCurrencyPairBuyQuantity = new BigDecimal("0");
+				BigDecimal viceCurrencyPairBuyPrice = new BigDecimal("0");
+				while(mainExchangeCurrencyPairBids.size() > 0 && viceExchangeCurrencyPairAsks.size() > 0){
+					BigDecimal hedgeBuyQuantity = null;
+					BigDecimal hedgeSellQuantity = null;
+					BigDecimal hedgeBuyPrice = null;
+					BigDecimal hedgeSellPrice = null;
+					
+					
+					
+					if(mainExchangeCurrencyPairBids.get(0).getQuantity().compareTo(viceExchangeCurrencyPairAsks.get(0).getQuantity()) > 0){
+						// 对冲买单的数量 = 少端 ÷ (1 - 费率)
+						// 这里避免手续费单边消耗基础货币, 对冲的量取决于量少的那一端
+						hedgeSellQuantity = viceExchangeCurrencyPairAsks.get(0).getQuantity();
+						hedgeSellPrice = mainExchangeCurrencyPairBids.get(0).getPrice();
+						hedgeBuyQuantity = hedgeSellQuantity.divide(ONE.subtract(this.feeRate), quantityScale + 3, RoundingMode.DOWN);
+						hedgeBuyPrice = viceExchangeCurrencyPairAsks.get(0).getPrice();
+						
+						//移除对冲掉的部分s
+						viceExchangeCurrencyPairAsks.remove(0);
+						mainExchangeCurrencyPairBids.get(0).setQuantity(mainExchangeCurrencyPairBids.get(0).getQuantity().subtract(hedgeSellQuantity));
+					}else{
+						hedgeSellQuantity = mainExchangeCurrencyPairAsks.get(0).getQuantity();
+						hedgeSellPrice = mainExchangeCurrencyPairBids.get(0).getPrice();
+						hedgeBuyQuantity = hedgeSellQuantity.divide(ONE.subtract(this.feeRate), quantityScale + 3, RoundingMode.DOWN);
+						hedgeBuyPrice = viceExchangeCurrencyPairAsks.get(0).getPrice();
+						
+						mainExchangeCurrencyPairBids.remove(0);
+						viceExchangeCurrencyPairAsks.get(0).setQuantity(viceExchangeCurrencyPairAsks.get(0).getQuantity().subtract(hedgeBuyQuantity));
+					}
+					
+					// 检查是否亏本
+					BigDecimal comsumedQuoteCurrency = hedgeBuyQuantity.multiply(hedgeBuyPrice); // 消耗的计价货币(买入消耗)
+					//BigDecimal earnedBaseCurrency = hedgeBuyQuantity;	// 得到的基础货币( 买入得到)
+					
+					//BigDecimal comsumedBaseCurrency = hedgeSellQuantity; // 消耗的基础货币（卖出消耗） 
+					BigDecimal earnedQuoteCurrency = hedgeSellQuantity.multiply(hedgeSellPrice).multiply(ONE.subtract(this.feeRate)); // 得到的计价货币（卖出得到）
+					
+					// 这里不检查基础货币的量了，计算的时候得到的基础货币的量几乎等于计价货币的量，
+					// 但由于尾差，得到的基础的量总会比消耗的基础货币的量小一点点，但这一点点可以忽略不计，可以通过稍微调大手续费率进行补偿。
+					if(earnedQuoteCurrency.compareTo(comsumedQuoteCurrency) > 0){ // 得到的计价货币比消耗的计价货币多，对冲能套利
+						mainCurrencyPairSellQuantity.add(hedgeSellQuantity);
+						mainCurrencyPairSellPrice = hedgeSellPrice;
+						viceCurrencyPairBuyQuantity.add(hedgeBuyQuantity);
+						viceCurrencyPairBuyPrice = hedgeBuyPrice;
+					}else{ // 没有对冲的机会了，直接跳出循环
+						break;
+					}
+				}
+				logger.debug("找到对冲套利机会，  {} {} 买入 {} {}, {} {} 卖出 {} {}", viceExchange, viceCurrencyPairBuyPrice, viceCurrencyPairBuyQuantity,viceCurrencyPair, mainExchange, mainCurrencyPairSellPrice, mainCurrencyPairSellQuantity, mainCurrencyPair);
+			}
+			
+			// 主交易所的卖一价小于副交易所的买一价，存在套利空间
+			else if(mainCurrencyPairSell1Price.compareTo(viceCurrencyPairBuy1Price) < 0){
+				logger.debug("存在搬砖套利可能的。");
+				// 既然主交易所的买一价小于副交易所的卖一价，那么应该在主交易所买入，副交易所卖出
+				BigDecimal mainCurrencyPairBuyQuantity = new BigDecimal("0");
+				BigDecimal mainCurrencyPairBuyPrice = new BigDecimal("0");
+				BigDecimal viceCurrencyPairSellQuantity = new BigDecimal("0");
+				BigDecimal viceCurrencyPairSellPrice = new BigDecimal("0");
+				while(mainExchangeCurrencyPairAsks.size() > 0 && viceExchangeCurrencyPairBids.size() > 0){
+					BigDecimal hedgeBuyQuantity = null;
+					BigDecimal hedgeBuyPrice = null;
+					BigDecimal hedgeSellQuantity = null;
+					BigDecimal hedgeSellPrice = null;
+					
+					
+					
+					if(mainExchangeCurrencyPairAsks.get(0).getQuantity().compareTo(viceExchangeCurrencyPairBids.get(0).getQuantity()) > 0){
+						hedgeSellQuantity = viceExchangeCurrencyPairBids.get(0).getQuantity();
+						hedgeSellPrice = viceExchangeCurrencyPairBids.get(0).getPrice();
+						hedgeBuyQuantity = hedgeSellQuantity.divide(ONE.subtract(this.feeRate), quantityScale + 3, RoundingMode.DOWN);
+						hedgeBuyPrice = mainExchangeCurrencyPairAsks.get(0).getPrice();
+						
+						viceExchangeCurrencyPairBids.remove(0);
+						mainExchangeCurrencyPairAsks.get(0).setQuantity(mainExchangeCurrencyPairAsks.get(0).getQuantity().subtract(hedgeBuyQuantity));
+					}else{
+						hedgeSellQuantity = mainExchangeCurrencyPairAsks.get(0).getQuantity();
+						hedgeSellPrice = viceExchangeCurrencyPairBids.get(0).getPrice();
+						hedgeBuyQuantity = hedgeSellQuantity.divide(ONE.subtract(this.feeRate), quantityScale + 3, RoundingMode.DOWN);
+						hedgeBuyPrice = mainExchangeCurrencyPairAsks.get(0).getPrice();
+						
+						mainExchangeCurrencyPairAsks.remove(0);
+						viceExchangeCurrencyPairBids.get(0).setQuantity(viceExchangeCurrencyPairBids.get(0).getQuantity().subtract(hedgeSellQuantity));
+					}
+					
+					// 检查是否亏本
+					BigDecimal comsumedQuoteCurrency = hedgeBuyQuantity.multiply(hedgeBuyPrice);
+					BigDecimal earnedQuoteCurrency = hedgeSellQuantity.multiply(hedgeSellPrice).multiply(ONE.subtract(this.feeRate));
+					if(earnedQuoteCurrency.compareTo(comsumedQuoteCurrency) > 0){
+						mainCurrencyPairBuyQuantity = mainCurrencyPairBuyQuantity.add(hedgeBuyQuantity);
+						mainCurrencyPairBuyPrice = hedgeBuyPrice;						
+						viceCurrencyPairSellPrice = hedgeSellPrice;
+						viceCurrencyPairSellQuantity = viceCurrencyPairSellQuantity.add(hedgeSellQuantity);
+					}else{
+						break;
+					}
+					
+				}
+				logger.debug("找到对冲套利机会，  {} {}买入{} {}, {} {}卖出{} {}", mainExchange, mainCurrencyPairBuyPrice, mainCurrencyPairBuyQuantity,mainCurrencyPair, viceExchange, viceCurrencyPairSellPrice,viceCurrencyPairSellQuantity, viceCurrencyPair);
+			}
+		}
+		// 主交易所与副交易所的币种相反
+		else if(mainExchangeBaseCurrency.equals(viceExchangeQuoteCurrency) && mainExchangeQuoteCurrency.equals(viceExchangeBaseCurrency)){
+			logger.info("此策略暂不支持主交易所与副交易所币种相反的情况。");
+		}else{
+			logger.error("币种对{}的{}与{}的{}不能进行对冲套利。", mainExchange, mainCurrencyPair, viceExchange, viceCurrencyPair);
+		}
+		
+		return hedgeOrders;
+	}
+	
 	/**
 	 * 根据对冲订单组合挂单
 	 * @param assemblyHedgeOrders
@@ -614,25 +876,26 @@ public class AssemblyHedge implements Strategy {
 		
 	}
 
-	
-	
 	public static void main(String[] args){
-		/*
-		List<HedgeCurrencyPair> hedgeCurrencyPairs = new ArrayList<>();
-		hedgeCurrencyPairs.add(new HedgeCurrencyPair("exx.com", "HSR_QC"));
-		hedgeCurrencyPairs.add(new HedgeCurrencyPair("zb.com", "HSR_QC"));
 		
+		List<HedgeCurrencyPair> hedgeCurrencyPairs = new ArrayList<>();
+		hedgeCurrencyPairs.add(new HedgeCurrencyPair("gate.io", "EOS_BTC"));
+		hedgeCurrencyPairs.add(new HedgeCurrencyPair("bit-z.com", "EOS_BTC"));
 		
 		new AssemblyHedge()
 		.setCycle(5000L)
 		.setFailedSleepTime(30000L)
 		.setHedgeCurrencyPairs(hedgeCurrencyPairs)
-		.setMarketAvailableDuration(2000L)
+		.setMarketAvailableDuration(3000L)
 		.setMaxPlanOrderNumber(10)
-		.run(null);*/
+		.setFeeRate(new BigDecimal("0.002"))
+		.setQuantityScale(4)
+		.setPriceScale(4)
+		.run(null);
 		
-		System.out.println(EndExchangeFactory.newInstance("bit-z.com").getOrder("eth_btc", "282971473"));
-		//System.out.println(EndExchangeFactory.newInstance("bit-z.com").getAccount());
+		
+		//EndExchangeFactory.newInstance("bit-z.com").order("SELL", "ETH_BTC", new BigDecimal("1"), new BigDecimal("10000"));
+		
 		
 	}
 	
