@@ -34,3 +34,25 @@ create table ASSEMBLY_HEDGE_ORDER(
 	CREATE_TIMESTAMP varchar(13),	-- 挂单创建时间
 	MODIFY_TIMESTAMP varchar(13)	-- 挂单修改时间
 )
+
+
+/**
+ * 波段对冲策略进行中订单对的表
+ */
+create table WAVE_HEDGE_ORDER_PAIR(
+	DATA_ID char(32) primary key,
+	PLANTFORM varchar(30),
+	CURRENCY varchar(15),
+	BUY_ORDER_ID varchar(32),
+	BUY_ORDER_PRICE numeric(20, 10),
+	BUY_ORDER_QUANTITY numeric(20, 10),
+	BUY_ORDER_STATUS varchar(15),
+	BUY_ORDER_FEE varchar(20),
+	CREATE_TIMESTAMP numeric(13),
+	MODIFY_TIMESTAMP numeric(13),
+	SELL_ORDER_ID varchar(32),
+	SELL_ORDER_PRICE numeric(20, 10),
+	SELL_ORDER_QUANTITY numeric(20, 10),
+	SELL_ORDER_STATUS varchar(15),
+	SELL_ORDER_FEE varchar(20)
+)
