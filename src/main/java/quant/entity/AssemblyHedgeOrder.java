@@ -1,5 +1,6 @@
 package quant.entity;
-// Generated 2018-5-7 14:39:14 by Hibernate Tools 4.3.1.Final
+// default package
+// Generated 2018-6-4 11:50:17 by Hibernate Tools 4.3.1.Final
 
 import java.math.BigDecimal;
 import javax.persistence.Column;
@@ -17,17 +18,23 @@ import org.hibernate.annotations.GenericGenerator;
 @Table(name = "ASSEMBLY_HEDGE_ORDER", catalog = "quant")
 public class AssemblyHedgeOrder implements java.io.Serializable {
 
+	/**
+	 * 
+	 */
 	private static final long serialVersionUID = 1L;
 	private String dataId;
 	private String hedgeId;
-	private String plantfrom;
-	private String currency;
+	private String plantform;
+	private String currencyPair;
+	private String quoteCurrency;
+	private String baseCurrency;
 	private String orderId;
 	private String orderSide;
 	private String orderStatus;
 	private BigDecimal orderPrice;
 	private BigDecimal orderQuantity;
 	private BigDecimal transPrice;
+	private BigDecimal feeRate;
 	private String createTimestamp;
 	private String modifyTimestamp;
 
@@ -38,19 +45,23 @@ public class AssemblyHedgeOrder implements java.io.Serializable {
 		this.dataId = dataId;
 	}
 
-	public AssemblyHedgeOrder(String dataId, String hedgeId, String plantfrom, String currency, String orderId,
-			String orderSide, String orderStatus, BigDecimal orderPrice, BigDecimal orderQuantity,
-			BigDecimal transPrice, String createTimestamp, String modifyTimestamp) {
+	public AssemblyHedgeOrder(String dataId, String hedgeId, String plantform, String currencyPair,
+			String quoteCurrency, String baseCurrency, String orderId, String orderSide, String orderStatus,
+			BigDecimal orderPrice, BigDecimal orderQuantity, BigDecimal transPrice, BigDecimal feeRate,
+			String createTimestamp, String modifyTimestamp) {
 		this.dataId = dataId;
 		this.hedgeId = hedgeId;
-		this.plantfrom = plantfrom;
-		this.currency = currency;
+		this.plantform = plantform;
+		this.currencyPair = currencyPair;
+		this.quoteCurrency = quoteCurrency;
+		this.baseCurrency = baseCurrency;
 		this.orderId = orderId;
 		this.orderSide = orderSide;
 		this.orderStatus = orderStatus;
 		this.orderPrice = orderPrice;
 		this.orderQuantity = orderQuantity;
 		this.transPrice = transPrice;
+		this.feeRate = feeRate;
 		this.createTimestamp = createTimestamp;
 		this.modifyTimestamp = modifyTimestamp;
 	}
@@ -76,22 +87,40 @@ public class AssemblyHedgeOrder implements java.io.Serializable {
 		this.hedgeId = hedgeId;
 	}
 
-	@Column(name = "PLANTFROM", length = 30)
-	public String getPlantfrom() {
-		return this.plantfrom;
+	@Column(name = "PLANTFORM", length = 30)
+	public String getPlantform() {
+		return this.plantform;
 	}
 
-	public void setPlantfrom(String plantfrom) {
-		this.plantfrom = plantfrom;
+	public void setPlantform(String plantform) {
+		this.plantform = plantform;
 	}
 
-	@Column(name = "CURRENCY", length = 15)
-	public String getCurrency() {
-		return this.currency;
+	@Column(name = "CURRENCY_PAIR", length = 20)
+	public String getCurrencyPair() {
+		return this.currencyPair;
 	}
 
-	public void setCurrency(String currency) {
-		this.currency = currency;
+	public void setCurrencyPair(String currencyPair) {
+		this.currencyPair = currencyPair;
+	}
+
+	@Column(name = "QUOTE_CURRENCY", length = 10)
+	public String getQuoteCurrency() {
+		return this.quoteCurrency;
+	}
+
+	public void setQuoteCurrency(String quoteCurrency) {
+		this.quoteCurrency = quoteCurrency;
+	}
+
+	@Column(name = "BASE_CURRENCY", length = 10)
+	public String getBaseCurrency() {
+		return this.baseCurrency;
+	}
+
+	public void setBaseCurrency(String baseCurrency) {
+		this.baseCurrency = baseCurrency;
 	}
 
 	@Column(name = "ORDER_ID", length = 32)
@@ -121,7 +150,7 @@ public class AssemblyHedgeOrder implements java.io.Serializable {
 		this.orderStatus = orderStatus;
 	}
 
-	@Column(name = "ORDER_PRICE", precision = 20, scale = 10)
+	@Column(name = "ORDER_PRICE", precision = 25, scale = 15)
 	public BigDecimal getOrderPrice() {
 		return this.orderPrice;
 	}
@@ -130,7 +159,7 @@ public class AssemblyHedgeOrder implements java.io.Serializable {
 		this.orderPrice = orderPrice;
 	}
 
-	@Column(name = "ORDER_QUANTITY", precision = 20, scale = 10)
+	@Column(name = "ORDER_QUANTITY", precision = 25, scale = 15)
 	public BigDecimal getOrderQuantity() {
 		return this.orderQuantity;
 	}
@@ -139,13 +168,22 @@ public class AssemblyHedgeOrder implements java.io.Serializable {
 		this.orderQuantity = orderQuantity;
 	}
 
-	@Column(name = "TRANS_PRICE", precision = 20, scale = 10)
+	@Column(name = "TRANS_PRICE", precision = 25, scale = 15)
 	public BigDecimal getTransPrice() {
 		return this.transPrice;
 	}
 
 	public void setTransPrice(BigDecimal transPrice) {
 		this.transPrice = transPrice;
+	}
+
+	@Column(name = "FEE_RATE", precision = 6, scale = 5)
+	public BigDecimal getFeeRate() {
+		return this.feeRate;
+	}
+
+	public void setFeeRate(BigDecimal feeRate) {
+		this.feeRate = feeRate;
 	}
 
 	@Column(name = "CREATE_TIMESTAMP", length = 13)
