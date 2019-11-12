@@ -2,848 +2,970 @@ package quant.strategy;
 
 import java.math.BigDecimal;
 import java.math.RoundingMode;
-import java.util.ArrayList;
 import java.util.Collections;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
+import java.util.UUID;
 
 import org.apache.logging.log4j.LogManager;
 import org.apache.logging.log4j.Logger;
-import org.hibernate.Session;
-import org.hibernate.Transaction;
-import org.hibernate.query.Query;
-
-import quant.entity.LiveOrderPair;
-import quant.exchange.EndExchangeFactory;
-import quant.utils.HibernateUtil;
+import exunion.exchange.Exchange;
+import exunion.metaobjects.Account;
 import exunion.metaobjects.Depth;
 import exunion.metaobjects.Order;
 import exunion.metaobjects.OrderSide;
 import exunion.metaobjects.OrderStatus;
-import exunion.metaobjects.Ticker;
-import exunion.exchange.*;
+import quant.dao.CommonDao;
+import quant.entity.WaveHedgeOrder;
+import quant.exchange.EndExchangeFactory;
+import quant.utils.TimeUtil;
+
 
 /**
- * 波段对冲交易算法，仅进行波段操作，同时满足挂买单和卖单时才进行挂单操作。
+ * 波段操作策略，将账户余额分成多份，同时挂买单和卖单，当买单和卖单均成交时套利成功。
  * @author robothy
  *
  */
-public class WaveHedge {
+public class WaveHedge implements Strategy {
+
+	/***********************  常量定义 *************************/
+	private static final Logger logger = LogManager.getLogger("quant");
 	
-	private static final Logger logger = LogManager.getLogger("SimpleHedgeLogger");
+	private static final CommonDao commonDao = new CommonDao();
 	
-	// 对 LiveOrderPair 集合按照价格有高到低排序
-	private static final Comparator<LiveOrderPair> orderByBuyPriceDesc = new Comparator<LiveOrderPair>() {
-		public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
-			return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());
-		}
-	};
 	
-	// 对 LiveOrderPair 集合按照价格有低到高排序
-	private static final Comparator<LiveOrderPair> orderBySellPriceAsc = new Comparator<LiveOrderPair>() {
-		public int compare(quant.entity.LiveOrderPair o1, quant.entity.LiveOrderPair o2) {
-			return o1.getBuyOrderPrice().compareTo(o2.getBuyOrderPrice());
-		}
-	};
+	  
 	
-	//交易所名称
-	private String plantform = null;
+	// 排序规则
+	private final Comparator<WaveHedgeOrder> orderRule = (WaveHedgeOrder o1, WaveHedgeOrder o2) 
+			-> {
+				int side = o1.getOrderSide().compareTo(o2.getOrderSide());
+				int price = o2.getOrderPrice().compareTo(o1.getOrderPrice());
+				return side != 0 ? side : price; 
+			};
 	
-	//交易所
-	private Exchange exchange = null;
+	/*********************************************************/
+	
+	
+	
+	/***********************  参数定义 *************************/
+	
+	// 交易所名称
+	private String exchangeName = null;
+	
+	// 获取交易所名称
+	public String getExchangeName(){
+		return this.exchangeName;
+	}
+	
+	// 设置交易所名称
+	public WaveHedge setExchangeName(String exchangeName){
+		this.exchangeName = exchangeName;
+		return this;
+	}
+	
+	// 币种对
+	private String currencyPair = null;
+	
+	// 获取币种对
+	public String getCurrencyPair(){
+		return this.currencyPair;
+	}
+	
+	// 设置币种对
+	public WaveHedge setCurrencyPair(String currencyPair){
+		this.currencyPair = currencyPair;
+		return this;
+	}
+	
+	// 最高价
+	private BigDecimal highestPrice = null;
+	
+	// 设置对冲操作的最高价
+	public WaveHedge setHighestPrice(BigDecimal highestPrice){
+		this.highestPrice = highestPrice;
+		return this;
+	}
+	
+	// 获取对冲操作的最高价
+	public BigDecimal getHighestPrice(){
+		return this.highestPrice;
+	}
+	
+	// 操作的最低价
+	private BigDecimal lowestPrice = null;
+	
+	/**
+	 * 设置操作的最低价
+	 * @param lowestPrice 最低价
+	 */
+	public WaveHedge setLowestPrice(BigDecimal lowestPrice){
+		this.lowestPrice = lowestPrice;
+		return this;
+	}
+
+	/**
+	 * 获取操作的最低价
+	 * @return 最低价
+	 */
+	public BigDecimal getLowestPrice(){
+		return this.lowestPrice;
+	}
 	
 	//API操作失败休息时间， （单位：毫秒），默认 1000ms
-	private Long failedSleepTime = 1000L;
-	
-	//最高操作价格
-	private BigDecimal maxPrice = null;
-	
-	//最低操作价格
-	private BigDecimal minPrice = null;
-	
-	//单次操作量
-	private BigDecimal quantity = null;
-	
-	//对冲交易对之间的价格比率间隔
-	private BigDecimal intervalRate = null;
-	
-	//交易对最小利润率，刨除交易费率之后的利润率
-	private BigDecimal minProfitMargin = null;
-	
-	//交易对最大利润率，刨除交易费率之后的最大利润率
-	private BigDecimal maxProfitMargin = null;
-	
-	//交易费率
-	private BigDecimal feeRate = null;
-
-	//价格精度，小数点后 n 位
-	private int pricePrecision = 2;
-	
-	//操作的币种
-	private String currency = null;
-	
-	//操作周期, 默认10毫秒
-	private Long cycle = 10L;
-	
-	private List<LiveOrderPair> liveSellOrderPairs = null;
-	
-	private List<LiveOrderPair> liveBuyOrderPairs = null;
-	
-	
-	
-	//private Comparator<LiveOrderPair> orderBySellPriceDesc = null;
-	
-	private BigDecimal kM = null;
-	
-	private BigDecimal kN = null;
-	
-	BigDecimal ONE = new BigDecimal("1");
+	private Long failedSleepTime = 30000L;
 	
 	/**
-	 * 验证参数的合理性，验证失败时打印验证错误原因，并退出系统，减少不必要的损失。
+	 * @return 操作失败时休息时间(单位：毫秒)
 	 */
-	private Boolean validateParameters(){
-		
-		Boolean result = true;
-		
-		if(null == plantform){
-			logger.error("交易平台不能为空。");
-			result = false;
-		}
-		
-		if(null == maxPrice){
-			logger.error("最高操作价格不能为空，请调用本类的 setMaxPrice 方法设置。");
-			result = false;
-		}
-		
-		if(null == minPrice){
-			logger.error("最低操作价格不能为空，请调用本类 setMinPrice 方法设置。");
-			result = false;
-		}
-		
-		if(null == quantity){
-			logger.error("单笔交易操作量不能为空， 请调用本类 setQuantity 方法设置。");
-			result = false;
-		}
-		
-		if(null == intervalRate){
-			logger.error("对冲交易对之间的比率间隔不能为空，请调用本类 setIntervalRate 方法设置。");
-			result = false;
-		}
-		
-		if(null == minProfitMargin){
-			logger.error("最低利润率（刨除交易费率）不能为空，请调用本类的 setMinProfitMargin 方法设置。");
-			result = false;
-		}
-		
-		if(null == maxProfitMargin){
-			logger.warn("最高利润率（刨除交易费率）不能为空，请调用本类的 setMaxProfitMargin 方法设置。");
-		}
-		
-		if(null == currency){
-			logger.error("币种不能为空，请调用本类的 setCurrency 方法设置");
-			result = false;
-		}
-		
-		if(null == feeRate){
-			logger.error("交易费率不能为空。");
-			result = false;
-		}
-		
-		Depth depth = exchange.getDepth(currency);
-		if(depth == null){
-			logger.error("获取深度信息失败。");
-			result = false;
-		}
-		
-		if(false == result){
-			return false;
-		}
-		
-		BigDecimal bidPrice = depth.getBids().get(0).getPrice();
-		if(minPrice.compareTo(bidPrice) >= 0){
-			logger.error("最低操作价不能高于当前的买一价。");
-			result = false;
-		}
-		
-		BigDecimal askPrice = depth.getAsks().get(0).getPrice();
-		if(this.maxPrice.compareTo(askPrice) <= 0){
-			logger.error("最高操作价不能低于当前的卖一价。");
-			result = false;
-		}
-		
-		if(maxProfitMargin.compareTo(minProfitMargin) < 0){
-			logger.error("最高利润率不能低于最低利润率");
-			result = false;
-		}
-		
-		if(pricePrecision < 0){
-			logger.error("价格精度不能小于 0");
-			result = false;
-		}
-		
-		return result;
-	}
-	
-	/**
-	 * 初始化相关变量，包括实例化一些对象，计算参数值。
-	 */
-	private void init(){
-		if(null == exchange){
-			exchange = EndExchangeFactory.newInstance(plantform);
-		}
-		
-		if(null == liveSellOrderPairs){
-			liveSellOrderPairs = new ArrayList<LiveOrderPair>();
-		}
-		
-		if(null == liveBuyOrderPairs){
-			liveBuyOrderPairs = new ArrayList<LiveOrderPair>();
-		}
-		
-		if(null == kM){
-			BigDecimal wholeMaxProfitMargin = maxProfitMargin.add(feeRate).add(feeRate.multiply(ONE.add(feeRate))); 
-			kM = new BigDecimal(StrictMath.sqrt(wholeMaxProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
-		}
-		
-		if(null == kN){
-			BigDecimal wholeMinProfitMargin = minProfitMargin.add(feeRate).add(feeRate.multiply(ONE.add(feeRate)));
-			kN = new BigDecimal(StrictMath.sqrt(wholeMinProfitMargin.add(ONE).doubleValue())).divide(ONE, 4, RoundingMode.HALF_EVEN);
-		}
-		
-	}
-	
-	
-	
-	
-	
-	/**
-	 * 同步订单信息。
-	 * 
-	 * <p>在策略初始启动的时候执行，执行之后内存中各对象的状态如下：
-	 * <ul>
-	 * <li> 进行中的买单列表 liveBuyOrderPairs 中仅包含进行中的买单
-	 * <li> 进行中的卖单列表 liveSellOrderPairs 中仅包含进行中的卖单
-	 * <li> 计划买单交易对列表 planBuyOrderPairs 中仅包含买单状态为 PLAN 的交易对，卖单状态不限
-	 * <li> 计划卖单交易对列表 planSellOrderPairs 中仅包含卖单状态为 PLAN 的交易对，买单状态不限
-	 * 
-	 */
-	private Boolean updateOrders(){
-		Session session = HibernateUtil.getSession();
-		
-		//检索没有完全完成的对冲交易对
-		String hql = "from LiveOrderPair where currency=:currency and (buyOrderStatus!='FILLED' or sellOrderStatus!='FILLED')";
-		Query<LiveOrderPair> query = session.createQuery(hql, LiveOrderPair.class);
-		query.setParameter("currency", currency);
-		List <LiveOrderPair> persistedOrderPairs = query.getResultList();
-		
-		for(LiveOrderPair orderPair : persistedOrderPairs){
-			
-			String buyOrderStatus = orderPair.getBuyOrderStatus();
-			
-			String sellOrderStatus = orderPair.getSellOrderStatus();
-			
-			//将不同状态的订单放到不同的列表当中
-			
-			if("PLAN".equals(buyOrderStatus)){
-				planBuyOrderPairs.add(orderPair);
-			}else if(OrderStatus.NEW.equals(buyOrderStatus)){
-				liveBuyOrderPairs.add(orderPair);
-			}
-			
-			if("PLAN".equals(sellOrderStatus)){
-				planSellOrderPairs.add(orderPair);
-			}else if(OrderStatus.NEW.equals(sellOrderStatus)){
-				liveSellOrderPairs.add(orderPair);
-			}
-			
-		}
-		logger.info("订单从数据库加载完成！");
-		logger.info("进行中买单数：" + liveBuyOrderPairs.size());
-		logger.info("进行中卖单数：" + liveSellOrderPairs.size());
-		logger.info("计划中买单数：" + planBuyOrderPairs.size());
-		logger.info("计划中卖单数：" + planSellOrderPairs.size());
-		return true;
-	}
-	
-	/**
-	 * 根据深度和行情信息为设计对冲交易对的价格。
-	 * @param depth 深度信息
-	 * @param ticker 行情信息
-	 * @param buyPrice 买单价格
-	 * @param sellPrice 卖单价格
-	 */
-	private void calculatePrice(Depth depth, Ticker ticker,final PricePair pricePair){
-		
-		BigDecimal lastPrice = ticker.getLastPrice();
-		BigDecimal buy1Price = depth.getBids().get(0).getPrice();	//	买一价
-		BigDecimal sell1Price = depth.getAsks().get(0).getPrice();	//	卖一价
-		
-		//总费率，基于买价 
-		// 总费率 = 一般费率 + 一般费率 * (卖出价 ÷ 买入价)
-		BigDecimal wholeFeeRate = feeRate.add(feeRate.multiply(sell1Price.divide(buy1Price, 6, RoundingMode.HALF_EVEN))); 
-		
-		//利润率，基于买价
-		BigDecimal profitMargin = sell1Price.subtract(buy1Price).divide(buy1Price, 6, RoundingMode.HALF_EVEN).subtract(wholeFeeRate);
-		
-		BigDecimal _buyPrice = null;
-		BigDecimal _sellPrice = null;
-		
-		//以买一价买，卖一价卖的利润率大于最小利润率，小于最大利润率
-		if(profitMargin.compareTo(minProfitMargin)>=0 && profitMargin.compareTo(maxProfitMargin)<=0){
-			_buyPrice = buy1Price;	//直接以买一价作为买价，卖一价作为卖价
-			_sellPrice = sell1Price;
-		//以买一价买，卖一价卖的利润率小于最小利润率，根据最小利润率和最新成交价调整买入卖出价格
-		}else if(profitMargin.compareTo(minProfitMargin)<0){
-			_buyPrice = lastPrice.divide(kN, pricePrecision, RoundingMode.HALF_DOWN);
-			_sellPrice = lastPrice.multiply(kN).divide(ONE, pricePrecision, RoundingMode.HALF_DOWN);
-		//以买一价买，卖一价卖的利润率大于最大利润率，根据最大利润率和最新成交价调整买入卖出价格
-		}else if(profitMargin.compareTo(maxProfitMargin)>0){
-			_buyPrice = lastPrice.divide(kM, pricePrecision, RoundingMode.HALF_DOWN);
-			_sellPrice = lastPrice.multiply(kM).divide(ONE, pricePrecision, RoundingMode.HALF_DOWN);
-		}
-		pricePair.setBuyPrcie(_buyPrice);
-		pricePair.setSellPrice(_sellPrice);
-	}
-	
-	//获取最靠近两个单子的金额
-	private void closestPrice(final PricePair pricePair){
-		
-		BigDecimal _maxBuyPrice = new BigDecimal(-1);
-		BigDecimal _minSellPrice = new BigDecimal(-1);
-		
-		//求最大的买单价格
-		if(liveBuyOrderPairs.size() == 0){
-			_maxBuyPrice = minPrice;
-		}else{
-			Collections.sort(liveBuyOrderPairs, new Comparator<LiveOrderPair>() {
-				public int compare(LiveOrderPair o1, LiveOrderPair o2) {
-					return o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice());//从大到小排序
-				}
-			});
-			_maxBuyPrice = liveBuyOrderPairs.get(0).getBuyOrderPrice();
-		}
-		
-		//求最小的卖单价格
-		if(liveSellOrderPairs.size() == 0){
-			_minSellPrice = maxPrice;
-		}else{
-			Collections.sort(liveSellOrderPairs, orderBySellPriceAsc);
-			_minSellPrice = liveSellOrderPairs.get(0).getSellOrderPrice();
-		}
-		pricePair.setBuyPrcie(_maxBuyPrice);
-		pricePair.setSellPrice(_minSellPrice);
-	}
-	
-	/**
-	 * 判断是否满足下普通买单的条件，若买入价与当前账户进行买单中最高买价相差超过订单间隔比率 intervalRate，
-	 * 则表示满足买入条件，否则不满足。
-	 * @param buyPrice 买入价
-	 * @param maxBuyPrice 当前账户进行订单中买入价格最高买单
-	 * @return true - 满足买入条件， false - 不满足条件
-	 */
-	private Boolean isMeetBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice){
-		return buyPrice.subtract(maxBuyPrice).divide(maxBuyPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
-	}
-	
-	/**
-	 * 判断是否满足下计划买单的条件。 当计划买单中的最高价满足下普通买单条件或者计划买单中的最高价大于卖一价时，
-	 * 表示满足下计划买单的条件。
-	 * <p>采用这种方式判断的目的在于尽快完成对冲订单对。
-	 * @param buyPrice 计划买单中的最高价
-	 * @param maxBuyPrice 当前账户进行买单中的最高买价 
-	 * @param depth 市场深度信息
-	 * @return true - 满足买入条件， false - 不满足买入条件
-	 */
-	private Boolean isMeetPlanBuyOrderCondition(BigDecimal buyPrice, BigDecimal maxBuyPrice, Depth depth){
-		return isMeetBuyOrderCondition(buyPrice, maxBuyPrice) 
-				|| buyPrice.compareTo(depth.getAsks().get(0).getPrice()) > 0;
-	}
-	
-	//判断是否满足下计划卖单的条件
-	private Boolean isMeetPlanSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice, Depth depth){
-		return isMeetSellOrderCondition(sellPrice, minSellPrice)
-				|| sellPrice.compareTo(depth.getBids().get(0).getPrice()) < 0;
-	}
-	
-	//判断是否满足下卖单的条件
-	private Boolean isMeetSellOrderCondition(BigDecimal sellPrice, BigDecimal minSellPrice){
-		return minSellPrice.subtract(sellPrice).divide(sellPrice, 4, RoundingMode.HALF_EVEN).compareTo(intervalRate) >= 0;
-	}
-	
-	
-	/**
-	 * 
-	 * <P> 每轮都执行此方法，用于实时同步订单信息。
-	 * 
-	 * <P> 更新已经下单的订单信息, 若更新时出现异常情况，则返回 null
-	 * 
-	 * <p> 对进行中的买单按照金额大小从大到小排序，逐个判断订单是否成交。
-	 * 若订单已经成交，则从进行中的订单列表中移除，同时更新数据库。
-	 * 
-	 * @return
-	 */
-	private Boolean updateLiveOrders(){
-		
-		Collections.sort(liveBuyOrderPairs, orderByBuyPriceDesc);
-		int primitiveBuyOrderSize = liveBuyOrderPairs.size();
-		for(int i=0, k=0; i<primitiveBuyOrderSize - k; i++){
-			Order order = exchange.getOrder(liveBuyOrderPairs.get(i).getCurrency(), liveBuyOrderPairs.get(i).getBuyOrderId());
-			if(order == null){
-				logger.error("获取买单" + liveBuyOrderPairs.get(i).getBuyOrderId() + "失败！");
-				return false;
-			}
-			LiveOrderPair orderPairs = liveBuyOrderPairs.get(i);
-			Boolean isStatusChanged = false;
-			//订单已经成交
-			if(order.getStatus().equals(OrderStatus.FILLED)){
-				orderPairs.setBuyOrderPrice(order.getPrice());
-				orderPairs.setBuyOrderStatus(order.getStatus());
-				orderPairs.setBuyOrderQuantity(order.getQuantity());
-				isStatusChanged = true;
-			}else if (order.getStatus().equals(OrderStatus.CANCELED)){//订单已被取消
-				//订单不能被取消，被取消的话对冲实现起来困难，将被取消的订单放到计划订单列表中
-				orderPairs.setBuyOrderStatus("PLAN");
-				planBuyOrderPairs.add(orderPairs);
-				isStatusChanged = true;
-			}//因为金额大的买单都没有成交，下面金额小的更不可能成交，所以直接跳出，不必再查看是否成交。
-			
-			if(isStatusChanged == true){
-				logger.info("订单编号为[" + orderPairs.getBuyOrderId() + "]的买单状态变为" + orderPairs.getBuyOrderStatus());
-				liveBuyOrderPairs.remove(i);
-				k++;
-				i--;
-				//更新数据库
-				Session session = HibernateUtil.getSession();
-				Transaction transaction = session.beginTransaction();
-				session.merge(orderPairs);
-				
-				transaction.commit();
-				session.close();
-			}else{
-				break;
-			}
-		}
-		
-		Collections.sort(liveSellOrderPairs, orderBySellPriceAsc);
-		int primitiveSellOrderSize = liveSellOrderPairs.size();
-		for(int i=0, k=0; i<primitiveSellOrderSize - k; i++){
-			Order order = exchange.getOrder(liveSellOrderPairs.get(i).getCurrency(), liveSellOrderPairs.get(i).getSellOrderId());
-			LiveOrderPair orderPair = liveSellOrderPairs.get(i);
-			Boolean isStatusChanged = false;
-			if(null == order ){
-				logger.error("获取卖单" + liveSellOrderPairs.get(i).getSellOrderId() + "失败！");
-				return false;
-			}else{
-				if(order.getStatus().equals(OrderStatus.FILLED)){
-					orderPair.setSellOrderStatus(order.getStatus());
-					orderPair.setSellOrderPrice(order.getPrice());
-					orderPair.setSellOrderQuantity(order.getQuantity());
-					liveSellOrderPairs.remove(i);
-					isStatusChanged = true;
-				}else if(order.getStatus().equals(OrderStatus.CANCELED)){
-					orderPair.setSellOrderStatus("PLAN");
-					planSellOrderPairs.add(orderPair);
-					isStatusChanged = true;
-				}
-			}
-			
-			if(isStatusChanged){
-				logger.info("订单编号为[" + orderPair.getSellOrderId() + "]的买单状态变为" + orderPair.getSellOrderStatus());
-				k++;
-				i--;
-				//更新数据库
-				Session session = HibernateUtil.getSession();
-				Transaction transaction = session.beginTransaction();
-				session.merge(orderPair);
-				transaction.commit();
-				session.close();
-			}else{//金额小的卖单状态没有改变，金额大的卖单更不可能成交
-				break;
-			}
-		}
-		return true;
-	}
-	
-	/**
-	 * 延时函数
-	 * @param ms 延时时间（单位：毫秒）
-	 */
-	private void delay(Long ms){
-		try {
-			Thread.sleep(ms);
-		} catch (InterruptedException e) {
-			e.printStackTrace();
-			logger.error(e);
-		}
-	}
-	
-	public String getPlantform() {
-		return plantform;
-	}
-
-	public WaveHedge setPlantform(String plantform) {
-		this.plantform = plantform;
-		return this;
-	}
-	
-	public String getCurrency() {
-		return currency;
-	}
-
-	public WaveHedge setCurrency(String currency) {
-		this.currency = currency;
-		return this;
-	}
-
-	public Long getCycle() {
-		return cycle;
-	}
-
-	public WaveHedge setCycle(Long cycle) {
-		this.cycle = cycle;
-		return this;
-	}
-	
-	public Exchange getExchange() {
-		return exchange;
-	}
-
-	public BigDecimal getMaxPrice() {
-		return maxPrice;
-	}
-
-	public WaveHedge setMaxPrice(BigDecimal maxPrice) {
-		this.maxPrice = maxPrice;
-		return this;
-	}
-
-	public BigDecimal getMinPrice() {
-		return minPrice;
-	}
-
-	public WaveHedge setMinPrice(BigDecimal minPrice) {
-		this.minPrice = minPrice;
-		return this;
-	}
-
-	public BigDecimal getQuantity() {
-		return quantity;
-	}
-
-	public WaveHedge setQuantity(BigDecimal quantity) {
-		this.quantity = quantity;
-		return this;
-	}
-
-	public BigDecimal getIntervalRate() {
-		return intervalRate;
-	}
-
-	public WaveHedge setIntervalRate(BigDecimal intervalRate) {
-		this.intervalRate = intervalRate;
-		return this;
-	}
-
-	public BigDecimal getMinProfitMargin() {
-		return minProfitMargin;
-	}
-
-	public WaveHedge setMinProfitMargin(BigDecimal minProfitMargin) {
-		this.minProfitMargin = minProfitMargin;
-		return this;
-	}
-
-	public BigDecimal getMaxProfitMargin() {
-		return maxProfitMargin;
-	}
-
-	public WaveHedge setMaxProfitMargin(BigDecimal maxProfitMargin) {
-		this.maxProfitMargin = maxProfitMargin;
-		return this;
-	}
-
-	public BigDecimal getFeeRate() {
-		return feeRate;
-	}
-
-	public WaveHedge setFeeRate(BigDecimal feeRate) {
-		this.feeRate = feeRate;
-		return this;
-	}
-
-	//获取价格精度，小数点后n位
-	public int getPricePrecision() {
-		return pricePrecision;
-	}
-
 	public Long getFailedSleepTime() {
 		return failedSleepTime;
 	}
-
-	//设置API失败之后的休息时间（单位：毫秒），默认1000ms
+	
+	/**
+	 * 设置操作失败休息时间（单位：毫秒）
+	 * @param failedSleepTime 操作失败休息时间（单位：毫秒）
+	 */
 	public WaveHedge setFailedSleepTime(Long failedSleepTime) {
 		this.failedSleepTime = failedSleepTime;
 		return this;
 	}
-
+	
+	//操作周期, 默认10毫秒
+	private Long cycle = 5000L;
+	
 	/**
-	 * 设置价格精度，小数点后 pricePrecision 位。
-	 * @param pricePrecision 默认值： 2
+	 * @return 每轮操作的时间（单位：毫秒）
+	 */
+	public Long getCycle() {
+		return cycle;
+	}
+	
+	/**
+	 * 设置每轮操作的时间（单位：毫秒）
+	 * @param cycle 每轮操作的时间（单位：毫秒）
+	 */
+	public WaveHedge setCycle(Long cycle) {
+		this.cycle = cycle;
+		return this;
+	}
+		
+	/**
+	 *  市场有效时间(单位：毫秒)，默认值 500，表示市场行情有效时间，
+	 *  即在获取行情数据时，交易所必须在此时间之内返回行情数据，否则认为获取到的数据无效
+	 */
+	private Long marketAvailableDuration = 500L;
+	
+	/**
+	 * 获取市场有效时间
+	 * <p>
+	 * 市场有效时间(单位：毫秒)，默认值 500，表示市场行情有效时间，
+	 * 即在获取行情数据时，交易所必须在此时间之内返回行情数据，否则认为获取到的数据无效
+	 * @return 市场有效时间
+	 */
+	public Long getMarketAvailableDuration() {
+		return marketAvailableDuration;
+	}
+	
+	
+	/**
+	 * 交易手续费费率
+	 */
+	private BigDecimal feeRate = new BigDecimal("0.002");
+	
+	/**
+	 * 这里认为不同交易所的费率相同
+	 * @return 交易手续费费率
+	 */
+	public BigDecimal getFeeRate(){
+		return feeRate;
+	}
+	
+	/**
+	 * 设置交易手续费费率
+	 * @param feeRate 交易手续费费率， 默认 0.002
 	 * @return
 	 */
-	
-	public WaveHedge setPricePrecision(int pricePrecision) {
-		this.pricePrecision = pricePrecision;
+	public WaveHedge setFeeRate(BigDecimal feeRate){
+		this.feeRate = feeRate;
 		return this;
 	}
 	
-	private static class PricePair{
-		
-		private BigDecimal buyPrcie = null;
-		
-		private BigDecimal sellPrice = null;
-		
-		public PricePair(){}
-		
-		public BigDecimal getBuyPrcie() {
-			return buyPrcie;
-		}
-
-		public void setBuyPrcie(BigDecimal buyPrcie) {
-			this.buyPrcie = buyPrcie;
-		}
-
-		public BigDecimal getSellPrice() {
-			return sellPrice;
-		}
-
-		public void setSellPrice(BigDecimal sellPrice) {
-			this.sellPrice = sellPrice;
-		}
-	}
-	
+	/**
+	 * 价格精度，小数点后的位数
+	 * 
+	 */
+	private Integer priceScale = null; 
 	
 	/**
-	 * 交易入口，调用此方法之后系统将按照策略持续下单，更新订单信息。
+	 * 设置价格精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @param priceScale 价格精度
+	 * @return
 	 */
-	public void earnMoney(){
+	public WaveHedge setPriceScale(Integer priceScale){
+		this.priceScale = priceScale;
+		return this;
+	}
+	
+	/**
+	 * 获取价格精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @return 价格精度
+	 */
+	public Integer  getPriceScale(){
+		return this.priceScale;
+	}
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 */
+	private Integer quantityScale = null;
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @param quantityScale 量精度
+	 * @return
+	 */
+	public WaveHedge setQuantityScale(Integer quantityScale){
+		this.quantityScale = quantityScale;
+		return this;
+	}
+	
+	/**
+	 * 量精度，精度用整数表示，例如：2表示保留小数点后2位
+	 * @return 量精度
+	 */
+	public Integer getQuantityScale(){
+		return this.quantityScale;
+	}
+	
+	/**
+	 * 单笔交易基础货币最小量
+	 */
+	private BigDecimal minQuantity = null;
+	
+	/**
+	 * 设置单笔交易基础货币最小量
+	 * @param minQuantity 交易量
+	 */
+	public WaveHedge setMinQuantity(BigDecimal minQuantity){
+		this.minQuantity = minQuantity;
+		return this;
+	}
+	
+	/**
+	 * 设置单笔交易基础货币最小量
+	 * @return 最小量
+	 */
+	public BigDecimal getMinQuantity(){
+		return this.minQuantity;
+	}
+	
+	/**
+	 * 交易对之间的间隔比率。
+	 * <p>例如:间隔比率是 0.1，则相邻两单的卖价可以为 1 和 1.1, 因为 (1.1 - 1) ÷ 1 = 0.1
+	 */
+	private BigDecimal intervalRate = null;
+	
+	/**
+	 * 设置交易对之间的间隔比率。
+	 * <p>例如:间隔比率是 0.1，则相邻两单的卖价可以为 1 和 1.1, 因为 (1.1 - 1) ÷ 1 = 0.1
+	 */
+	public WaveHedge setIntervalRate(BigDecimal intervalRate){
+		this.intervalRate = intervalRate;
+		return this;
+	}
+	
+	/**
+	 * 获取交易对之间的间隔比率，例如：
+	 * <p>间隔比率是 0.1，则相邻两单的卖价可以为 1 和 1.1, 因为 (1.1 - 1) ÷ 1 = 0.1
+	 * @return 交易对之间的间隔比率
+	 */
+	public BigDecimal getIntervalRate(){
+		return this.intervalRate;
+	}
+	
+	/**
+	 * 刨除手续费之后的最小套利空间
+	 */
+	private BigDecimal minMarginRate = null;
+	
+	/**
+	 * 获取刨除手续费之后的最小套利空间
+	 * @return 最小套利空间
+	 */
+	public BigDecimal getMinMarginRate(){
+		return this.minMarginRate;
+	}
+	
+	/**
+	 * 设置刨除手续费之后的最小套利空间
+	 * @param minMarginRate 最小套利空间
+	 */
+	public WaveHedge setMinMarginRate(BigDecimal minMarginRate){
+		this.minMarginRate = minMarginRate;
+		return this;
+	}
+	
+	/**
+	 * 基础币获利比率与计价币获利比率的比值。
+	 * <p> 例如 0 则表示基础币比获利, 1表示基础币与计价币各获利一般。
+	 */
+	private BigDecimal marginSpecificValue = null;
+	
+	/**
+	 * 设置基础币获利比率与计价币获利比率的比值。
+	 * <p> 例如 0 则表示基础币比获利, 1表示基础币与计价币各获利一般。
+	 */
+	public WaveHedge setMarginSpecificValue(BigDecimal marginSpecificValue){
+		this.marginSpecificValue = marginSpecificValue;
+		return this;
+	}
+	
+	/**
+	 * 获取基础币获利比率与计价币获利比率的比值。
+	 * <p> 例如 0 则表示基础币比获利, 1表示基础币与计价币各获利一般。
+	 */
+	public BigDecimal getMarginSpecificValue(){
+		return this.marginSpecificValue;
+	}
+	
+	/**
+	 * 操作数量
+	 */
+	private BigDecimal quantity;
+	
+	/**
+	 * 设置操作数量
+	 * @param quantity
+	 * @return
+	 */
+	public WaveHedge setQuantity(BigDecimal quantity){
+		this.quantity = quantity;
+		return this;
+	}
+	
+	/**
+	 * 获取操作数量
+	 * @return
+	 */
+	public BigDecimal getQuantity(){
+		return this.quantity;
+	}
+	
+	/**
+	 * 更新余额频率
+	 */
+	private Integer updateBalanceFrequency = 1;
+	
+	/**
+	 * 设置更新余额的频率。
+	 * <p> 余额在本策略特定的条件下会更新，但有些本策略之外的操作也会影响余额。
+	 * 例如转入币，本策略并不能检测到这类操作。所以引入频率机制来更新余额，即策略每
+	 * 循环 updateBalanceFrequency 轮就更新一次余额。
+	 * @param updateBalanceFrequency
+	 */
+	public WaveHedge setUpdateBalanceFrequency(Integer updateBalanceFrequency){
+		this.updateBalanceFrequency = updateBalanceFrequency;
+		return this;
+	}
 
-		//初始化对象
+	/**
+	 * 获取更新余额的频率。
+	 * <p> 余额在本策略特定的条件下会更新，但有些本策略之外的操作也会影响余额。
+	 * 例如转入币，本策略并不能检测到这类操作。所以引入频率机制来更新余额，即策略每
+	 * 循环 updateBalanceFrequency 轮就更新一次余额。
+	 * @return
+	 */
+	public Integer getUpdateBalanceFrequency(){
+		return this.updateBalanceFrequency;
+	}
+	
+	/**
+	 * 更新挂单频率
+	 */
+	private Integer updateOrderFrequency = 1;
+	
+	/**
+	 * 设置更新订单的频率
+	 * @param updateOrderFrequency
+	 * @return
+	 */
+	public WaveHedge setUpdateOrderFrequency(Integer updateOrderFrequency){
+		this.updateOrderFrequency = updateOrderFrequency;
+		return this;
+	}
+	
+	/**
+	 * 获取更新订单的频率
+	 * @return
+	 */
+	public Integer getUpdateOrderFrequency(){
+		return this.updateOrderFrequency;
+	}
+	
+	/**********************************************************/
+	
+	
+	
+	/*========================全局参数定义=====================*/
+	
+	// 计价货币
+	private String quoteCurrency = null;
+	
+	// 获取计价货币
+	public String getQuoteCurrency(){
+		return this.quoteCurrency;
+	}
+	
+	// 基础货币
+	private String baseCurrency = null;
+	
+	// 获取基础货币
+	public String getBaseCurrency(){
+		return this.baseCurrency;
+	}
+	
+	// 对冲深度
+	private Integer hedgeLenth = null;
+	
+	/**
+	 * 设置对冲深度，即挂出的买单和卖单的最大数量，一般以预估的瞬间波动为准。
+	 * @param hedgeLenth
+	 */
+	public WaveHedge setHedgeLenth(Integer hedgeLenth){
+		this.hedgeLenth = hedgeLenth;
+		return this;
+	}
+	
+	// 获取对冲深度
+	public Integer getHedgeLenth(){
+		return this.hedgeLenth;
+	}
+	
+	/**
+	 * 未成交的订单
+	 */
+	private List<WaveHedgeOrder> unfilledOrders = null;
+	
+	/**
+	 * 交易所实例
+	 */
+	private Exchange exchange = null;
+	
+	/**
+	 * 获取交易所实例
+	 */
+	public Exchange getExchange(){
+		return this.exchange;
+	}
+	
+	// 计价货币余额
+	private BigDecimal quoteCurrencyBalance = null;
+	
+	// 获取计价货币余额
+	public BigDecimal getQuoteCurrencyBalance(){
+		return this.quoteCurrencyBalance;
+	}
+	
+	// 基础货币余额
+	private BigDecimal baseCurrencyBalance = null;
+	
+	// 获取基础货币余额
+	public BigDecimal getBaseCurrencyBalance(){
+		return this.baseCurrencyBalance;
+	}
+	
+	/*--------------------------------------------------------*/
+	
+	
+	/*=======================私有方法定义=======================*/
+	
+	/**
+	 * 校验参数
+	 * @return
+	 */
+	private Boolean validateParameters(){
+		Boolean result = true;
+		logger.info("参数校验开始。");
+		if(null == currencyPair){
+			logger.error("未设置交易币种对。");
+			result = false;
+		}
+		
+		if(null == exchangeName){
+			logger.error("未指定交易所。");
+			result = false;
+		}
+		
+		if(null == highestPrice){
+			logger.error("未设置最高操作价格。");
+			result = false;
+		}
+		
+		if(null == lowestPrice){
+			logger.error("未设置最低操作价格。");
+			result = false;
+		}
+		
+		if(null != lowestPrice && null != highestPrice && highestPrice.compareTo(lowestPrice) < 0){
+			logger.error("最低操作价格必须低于最高操作价格。");
+			result = false;
+		}
+		
+		if(null == this.priceScale){
+			logger.error("未设置价格精度。");
+			result = false;
+		}
+		
+		if(null == this.quantityScale){
+			logger.error("未设置量精度");
+			result = false;
+		}
+		
+		if(null == this.minQuantity){
+			logger.error("未设置单次挂单最小量。");
+			result = false;
+		}
+		
+		if(null == this.hedgeLenth){
+			logger.warn("未设置对冲的最大深度，最大深度将被设置为默认值 10");
+			this.hedgeLenth = 10;
+		}
+		
+		if(null == this.intervalRate){
+			logger.error("未设置交易对之间的间隔比率。");
+			result = false;
+		}
+		
+		if(null == minMarginRate){
+			logger.error("未设置扣除手续费后最小利润率。");
+			result = false;
+		}
+		
+		logger.info("参数校验完成。");
+		return result;
+	}
+	
+	/**
+	 * 初始化
+	 */
+	private Boolean init(){
+		Boolean result = false;
+		logger.info("正在初始化 LowPriceHedge 策略。");
+		String[] currArry = this.currencyPair.split("_");
+		this.baseCurrency = currArry[0];
+		this.quoteCurrency = currArry[1];
+		this.exchange = EndExchangeFactory.newInstance("hadax.com");
+		
+		logger.info("策略初始化完成。");
+		return result;
+	}
+	
+	/**
+	 * 启动策略时从数据库加载进行中的订单信息。
+	 * @return
+	 */
+	private Boolean loadUnfilledOrders(){
+		Boolean result = true;
+		logger.info("正在从数据库中加载进行中的 LOW_PRICE_HEDGE_ORDER_PAIR 订单...");
+		this.unfilledOrders = commonDao.findByHql("from WaveHedgeOrder where orderStatus != 'FILLED' and exchangeName='" + exchangeName + "' and currencyPair='" + currencyPair + "'", WaveHedgeOrder.class);
+		Collections.sort(this.unfilledOrders, this.orderRule);
+		logger.info("从数据库中加载 WAVE_HEDGE_ORER 订单完成。");
+		return result;
+	}
+	
+	/**
+	 * 更新余额
+	 */
+	private Boolean updateBalance(){
+		logger.info("正在更新余额 ...");
+		Account account =  this.exchange.getAccount();
+		if(null == account){
+			logger.error("获取账户信息失败，无法更新余额。");
+			return false;
+		}
+		this.quoteCurrencyBalance = account.getBalance(this.quoteCurrency).getFree();
+		this.baseCurrencyBalance = account.getBalance(this.baseCurrency).getFree();
+		logger.info("余额更新完成。");
+		return true;
+	}
+
+	/**
+	 * 更新挂单信息
+	 * @return
+	 */
+	private Boolean updateOrders(){
+		
+		Boolean isOrderChanged = false;
+		
+		for(int i=0; i<this.unfilledOrders.size(); i++){
+			WaveHedgeOrder buyOrder = this.unfilledOrders.get(i);
+			if(!OrderSide.BUY.equals(buyOrder.getOrderSide()) || "PLAN".equals(buyOrder.getOrderStatus())){
+				break;
+			}
+			String previrousStatus = buyOrder.getOrderStatus();
+			Order order = exchange.getOrder(buyOrder.getCurrencyPair(), buyOrder.getOrderId());
+			if(null == order){
+				return false;
+			}
+			if(previrousStatus.equals(order.getStatus())){
+				break;
+			}
+			
+			buyOrder.setOrderStatus(order.getStatus());
+			buyOrder.setModifyTimestamp(System.currentTimeMillis());
+			commonDao.saveOrUpdate(buyOrder);
+			this.unfilledOrders.remove(i--);
+			isOrderChanged = true;
+			TimeUtil.delay(cycle);
+		}
+		
+		for(int i=this.unfilledOrders.size() -1; i>0; i--){
+			WaveHedgeOrder sellOrder = this.unfilledOrders.get(i);
+			if(!OrderSide.SELL.equals(sellOrder.getOrderSide()) || "PLAN".equals(sellOrder.getOrderStatus())){
+				break;
+			}
+			String previrousStatus = sellOrder.getOrderStatus();
+			Order order = exchange.getOrder(sellOrder.getCurrencyPair(), sellOrder.getOrderId());
+			if(null == order){
+				return false;
+			}
+			if(previrousStatus.equals(order.getStatus())){
+				break;
+			}
+			
+			sellOrder.setOrderStatus(order.getStatus());
+			sellOrder.setModifyTimestamp(System.currentTimeMillis());
+			commonDao.saveOrUpdate(sellOrder);
+			this.unfilledOrders.remove(i);
+			isOrderChanged = true;
+			TimeUtil.delay(cycle);
+		}
+		
+		if(isOrderChanged){
+			updateBalance();
+		}
+		logger.debug("订单信息更新完成。");
+		return true;
+		
+	}
+	
+	/**
+	 * 在盘口下单
+	 * @param depth 深度信息
+	 * @return
+	 */
+	private Boolean placeOrder(Depth depth){
+		
+		BigDecimal buy1Price = depth.getBids().get(0).getPrice();
+		BigDecimal sell1Price = depth.getAsks().get(0).getPrice();
+		
+		if(sell1Price.compareTo(this.highestPrice) > 0){
+			logger.error("当前卖一价{}已超过波段操作的最高价{}", currencyPair, highestPrice);
+			return false;
+		}
+		
+		if(buy1Price.compareTo(this.lowestPrice) < 0){
+			logger.error("当前买一价{}已低于波段操作的最低价格{}", currencyPair, lowestPrice);
+			return false;
+		}
+		
+		BigDecimal maxBuyPrice = null;
+		
+		BigDecimal minSellPrice = null;
+		
+		if(this.unfilledOrders.size() != 0){
+			// 存在买单
+			if(OrderSide.BUY.equals(this.unfilledOrders.get(0).getOrderSide())){
+				maxBuyPrice = this.unfilledOrders.get(0).getOrderPrice();
+			}else{
+				maxBuyPrice = lowestPrice;
+			}
+			
+			// 存在卖单
+			if(OrderSide.SELL.equals(this.unfilledOrders.get(unfilledOrders.size() - 1).getOrderSide())){
+				minSellPrice = this.unfilledOrders.get(unfilledOrders.size() - 1).getOrderPrice();
+			}else{
+				minSellPrice = highestPrice;
+			}
+		}else{
+			maxBuyPrice = lowestPrice;
+			minSellPrice = highestPrice;
+		}
+		
+		BigDecimal orderLowerBound = maxBuyPrice.multiply(this.intervalRate.add(BigDecimal.ONE));
+		BigDecimal orderUpperBound = minSellPrice.divide(this.intervalRate.add(BigDecimal.ONE), this.priceScale + 3, RoundingMode.HALF_EVEN);
+		
+		
+		BigDecimal minPriceRate = minMarginRate.add(feeRate);
+		//最高买价和最低卖价之间仍然能够组成套利组合
+		if(orderUpperBound.subtract(orderLowerBound).divide(orderLowerBound, this.priceScale + 3, RoundingMode.DOWN).compareTo(minPriceRate) >= 0){
+			BigDecimal sumPrice = buy1Price.add(sell1Price);
+			BigDecimal buyPrice = sumPrice.divide(BigDecimal.ONE.add(BigDecimal.ONE).add(minPriceRate), priceScale + 3, RoundingMode.HALF_UP);
+			BigDecimal sellPrice = BigDecimal.ONE.add(minPriceRate).multiply(sumPrice).divide(BigDecimal.ONE.add(BigDecimal.ONE).add(minPriceRate), priceScale + 3, RoundingMode.HALF_UP);
+			if(buyPrice.compareTo(orderLowerBound) < 0){
+				buyPrice = orderLowerBound;
+				sellPrice = orderLowerBound.multiply(BigDecimal.ONE.add(minPriceRate));
+			}else if(sellPrice.compareTo(orderUpperBound) > 0){
+				sellPrice = orderUpperBound;
+				buyPrice = orderUpperBound.divide(BigDecimal.ONE.add(minPriceRate), priceScale + 3, RoundingMode.DOWN);
+			}
+			
+			// 计算下单数量
+			BigDecimal sellQuantity = this.quantity;
+			BigDecimal buyQuantity = sellQuantity.divide(BigDecimal.ONE.subtract(feeRate), quantityScale + 3, RoundingMode.UP);
+			
+			// 调整精度
+			buyQuantity = buyQuantity.divide(BigDecimal.ONE, quantityScale, RoundingMode.UP);
+			sellQuantity = sellQuantity.divide(BigDecimal.ONE, quantityScale, RoundingMode.DOWN);
+			buyPrice = buyPrice.divide(BigDecimal.ONE, priceScale, RoundingMode.DOWN);
+			sellPrice = sellPrice.divide(BigDecimal.ONE, priceScale, RoundingMode.UP);
+			
+			// 判断余额是否充足
+			if(this.baseCurrencyBalance.compareTo(sellQuantity) <=0 
+				|| this.quoteCurrencyBalance.compareTo(buyQuantity.multiply(buyPrice)) <= 0){
+				logger.error("余额不足，计价币{}剩余{},基础币{}剩余{}", quoteCurrency, quoteCurrencyBalance, baseCurrency, baseCurrencyBalance);
+				return false;
+			}
+			
+			
+			String hedgeId = UUID.randomUUID().toString().replace("-", "");
+			
+			WaveHedgeOrder buyOrder = buildWaveHedgeOrder(OrderSide.BUY, buyPrice, buyQuantity, hedgeId);
+			WaveHedgeOrder sellOrder = buildWaveHedgeOrder(OrderSide.SELL, sellPrice, sellQuantity, hedgeId);
+			buyOrder = this.order(buyOrder);
+			sellOrder = this.order(sellOrder);
+			if("PLAN".equals(buyOrder.getOrderStatus()) && "PLAN".equals(sellOrder.getOrderStatus())){
+				return false;
+			}else{
+				commonDao.saveOrUpdate(buyOrder);
+				commonDao.saveOrUpdate(sellOrder);
+				this.unfilledOrders.add(0, buyOrder);
+				this.unfilledOrders.add(this.unfilledOrders.size(), sellOrder);
+				updateBalance();
+			}
+		}
+		return true;
+	}
+	
+	/**
+	 * 下计划单
+	 * @return
+	 */
+	private Boolean placePlanOrder(){
+		Boolean result = true;
+		this.unfilledOrders
+		.parallelStream()
+		.filter(e ->  "PLAN".equals(e.getOrderStatus()))
+		.forEach(e -> {
+			WaveHedgeOrder order = this.order(e);
+			if(!"PLAN".equals(order.getOrderStatus())){
+				commonDao.saveOrUpdate(order);
+			}
+		});
+		return result;
+		
+	}
+	
+	private WaveHedgeOrder buildWaveHedgeOrder(String orderSide, BigDecimal orderPrice, BigDecimal orderQuantity, String hedgeId){
+		WaveHedgeOrder waveHedgeOrder = new WaveHedgeOrder();
+		waveHedgeOrder.setCreateTimestamp(System.currentTimeMillis());
+		waveHedgeOrder.setCurrencyPair(this.currencyPair);
+		waveHedgeOrder.setExchangeName(this.exchangeName);
+		waveHedgeOrder.setFeeRate(this.feeRate);
+		waveHedgeOrder.setHedgeId(hedgeId);
+		waveHedgeOrder.setOrderPrice(orderPrice);
+		waveHedgeOrder.setOrderQuantity(orderQuantity);
+		waveHedgeOrder.setOrderSide(orderSide);
+		return waveHedgeOrder;
+	}
+	
+	/**
+	 * 挂单
+	 * @param hedgeOrder 对冲单
+	 * @return
+	 */
+	private WaveHedgeOrder order(final WaveHedgeOrder hedgeOrder){
+		Order order = exchange.order(hedgeOrder.getOrderSide(), hedgeOrder.getCurrencyPair(), hedgeOrder.getOrderQuantity(), hedgeOrder.getOrderPrice());
+		if(null != order){
+			hedgeOrder.setOrderStatus(OrderStatus.NEW);
+			hedgeOrder.setOrderId(order.getOrderId());
+		}else{
+			hedgeOrder.setOrderStatus("PLAN");
+		}
+		hedgeOrder.setModifyTimestamp(System.currentTimeMillis());
+		return hedgeOrder;
+	}
+	
+	/**
+	 * 调整订单
+	 * @param depth
+	 * @return
+	 */
+	/*
+	private Boolean adjustOrder(Depth depth){
+		logger.debug("准备下计划单 ...");
+		
+		long newBuyOrderNum = this.unfilledOrders.stream()
+				.filter(e -> "NEW".equals(e.getOrderStatus()))
+				.filter(e -> "BUY".equals(e.getOrderSide()))
+				.count();
+		
+		long planBuyOrderNum = this.unfilledOrders.stream()
+				.filter(e -> "PLAN".equals(e.getOrderStatus()))
+				.filter(e -> "BUY".equals(e.getOrderSide()))
+				.count();
+		
+		// 新订单的数量超过了对冲单的长度
+		if(newBuyOrderNum > this.hedgeLenth){
+			logger.debug("新买单的数量{}大于对冲单的最大长度{}", newBuyOrderNum, hedgeLenth);
+			if(null == newOrderToPlanOrder(this.unfilledOrders.get((int) (newBuyOrderNum - 1)))){
+				return false;
+			}else{
+				return true;
+			}
+		}
+		
+		// 新订单的数量少于对冲长度，且有计划买单，将计划买单转化为买单
+		if(newBuyOrderNum < this.hedgeLenth && planBuyOrderNum > 0){
+			logger.debug("新买单的数量{}小于对冲单的最大长度{}且存在{}个计划买单。", newBuyOrderNum, hedgeLenth, planBuyOrderNum);
+			if(null == planOrderToNewOrder(this.unfilledOrders.get((int) newBuyOrderNum))){
+				return true;
+			}else{
+				return false;
+			}
+		}
+		
+		long newSellOrderNum = this.unfilledOrders.stream()
+				.filter(e -> "SELL".equals(e.getOrderSide()))
+				.filter(e -> "NEW".equals(e.getOrderStatus()))
+				.count();
+		
+		long planSellOrderNum = this.unfilledOrders.stream()
+				.filter(e -> "SELL".equals(e.getOrderSide()))
+				.filter(e -> "PLAN".equals(e.getOrderStatus()))
+				.count();
+		
+		if(newSellOrderNum > this.hedgeLenth){
+			logger.debug("新卖单的数量{}超过了最大对冲长度{}", newSellOrderNum, hedgeLenth);
+			if(null == newOrderToPlanOrder(this.unfilledOrders.get((int) (this.unfilledOrders.size() - newSellOrderNum -1)))){
+				return false;
+			}else{
+				return true;
+			}
+		}
+		
+		if(newSellOrderNum < this.hedgeLenth && planSellOrderNum > 0){
+			logger.debug("新卖单的数量{}小于最大对冲长度{}且存在{}计划卖单。", newSellOrderNum, hedgeLenth, planSellOrderNum);
+			if(null == planOrderToNewOrder(this.unfilledOrders.get((int) (this.unfilledOrders.size() - newSellOrderNum -2)))){
+				return false;
+			}else{
+				return true;
+			}
+		}
+		
+		logger.debug("计划单下单完成。");
+		return true;
+	}
+	*/
+	
+	
+	
+	/*--------------------------------------------------------*/
+	
+	
+	
+	@Override
+	public void run(Map<String, Object> parameters) {
+		
+		// 校验参数
+		if(!this.validateParameters()){
+			logger.error("参数校验失败。");
+			return;
+		}
+		
+		// 初始化策略
 		this.init();
 		
-		//校验参数
-		if(!this.validateParameters()){
-			logger.fatal("参数校验失败！退出系统。");
-			System.exit(0);
+		// 加载未完成的订单
+		this.loadUnfilledOrders();
+		
+		// 个更新余额
+		while(true){
+			if(this.updateBalance()){
+				break;
+			}
+			logger.error("更新余额失败。");
+			TimeUtil.delay(failedSleepTime);
 		}
-		//同步订单信息
-		this.updateOrders();
+		
+		int cycleTimes = 0;
 		
 		while(true){
+			TimeUtil.delay(this.cycle);
+			logger.debug("新一轮。");
 			
-			delay(cycle);
-			logger.debug("新一轮");
-			//更新挂单信息
-			if(!updateLiveOrders()){
-				logger.error("更新进行中的订单信息失败！");
-				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
-				delay(failedSleepTime);
-				logger.info("系统即将重试！");
-				continue;
+			
+			if(cycleTimes++>9999){
+				cycleTimes = 0;
 			}
 			
-			Depth depth = exchange.getDepth(currency);
-			//若获取深度信息失败，则暂停一段时间后再继续
+			
+			Depth depth = exchange.getDepth(currencyPair);
+			logger.debug(depth);
 			if(depth == null){
-				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
-				delay(failedSleepTime);
-				logger.info("系统即将重试！");
+				logger.error("获取深度信息失败，{}秒后进行下一轮操作。", this.failedSleepTime / 1000);
+				TimeUtil.delay(this.failedSleepTime);
 				continue;
 			}
 			
-			Ticker ticker = exchange.getTicker(currency);
-			if(null == ticker){
-				logger.info("获取" + currency + "的行情信息失败！");
-				logger.info("系统将在" + failedSleepTime/1000 + "秒后重试。");
-				delay(failedSleepTime);
-				logger.info("系统即将重试！");
+			// 更新订单
+			if(cycleTimes % this.updateOrderFrequency == 0 ||
+					depth.getBids().get(0).getPrice().compareTo(this.unfilledOrders.get(this.unfilledOrders.size()-1).getOrderPrice())>=0 ||
+					depth.getAsks().get(0).getPrice().compareTo(this.unfilledOrders.get(0).getOrderPrice()) <= 0){
+				// 更新订单信息
+				while(!this.updateOrders()){
+					logger.error("更新订单信息失败，{}秒后重试。", this.failedSleepTime / 1000);
+					TimeUtil.delay(this.failedSleepTime);
+					continue;
+				}
+			}
+			
+			this.placePlanOrder();
+			
+			if(!this.placeOrder(depth)){
+				logger.error("下单失败，{}秒后进行下一轮操作。", this.failedSleepTime / 1000);
+				TimeUtil.delay(failedSleepTime);
 				continue;
 			}
 			
-			PricePair pricePair = new PricePair();
+			/*if(!adjustOrder(depth)){
+				logger.error("调整订单失败，{}秒后进行下一轮。", this.failedSleepTime / 1000);
+				TimeUtil.delay(this.failedSleepTime);
+			}*/
 			
-			// 计算进行中的订单中的最高买价和最低卖价
-			BigDecimal maxBuyPrice = null;
-			BigDecimal minSellPrice = null;
-			closestPrice(pricePair);
-			maxBuyPrice = pricePair.getBuyPrcie();
-			minSellPrice = pricePair.getSellPrice();
-
-			//计算买入价与卖出价
-			BigDecimal buyPrice = null;	//买入价
-			BigDecimal sellPrice = null;//卖出价
-
-			
-			Boolean isBuy = false; //标志此轮是否下了买单
-			Boolean isSell = false; //标志此轮是否下了卖单
-			
-			//优先以计划订单中的买入价格的最高价和卖出价格的最低价作为买入价和卖出价
-			//存在计划的买单
-			if(planBuyOrderPairs.size()>0){
-				Collections.sort(planBuyOrderPairs, new Comparator<LiveOrderPair>() {
-					public int compare(LiveOrderPair o1, LiveOrderPair o2) {
-						return o1.getSellOrderStatus().compareTo(o2.getSellOrderStatus()) == 0 ?
-								o2.getBuyOrderPrice().compareTo(o1.getBuyOrderPrice()) : 
-									o1.getSellOrderStatus().compareTo(o2.getSellOrderStatus());
-					}
-				});
-				LiveOrderPair maxBuyPricePlanBuyOrderPair = planBuyOrderPairs.get(0);//计划买入订单中买入价最高的订单
-				buyPrice = maxBuyPricePlanBuyOrderPair.getBuyOrderPrice();
-				if(isMeetPlanBuyOrderCondition(buyPrice, maxBuyPrice, depth)){//满足下计划买单的条件
-					Order order = exchange.order(OrderSide.BUY, maxBuyPricePlanBuyOrderPair.getCurrency(), 
-							maxBuyPricePlanBuyOrderPair.getBuyOrderQuantity() , buyPrice);
-					if(null != order){//下单成功
-						isBuy = true;
-						maxBuyPricePlanBuyOrderPair.setBuyOrderId(order.getOrderId());
-						maxBuyPricePlanBuyOrderPair.setBuyOrderStatus(order.getStatus());
-						liveBuyOrderPairs.add(maxBuyPricePlanBuyOrderPair);//加入到进行中买单列表
-						planBuyOrderPairs.remove(0);//从计划买单列表中移除
-						Session session = HibernateUtil.getSession();//同步数据库中的状态
-						session.beginTransaction();
-						session.merge(maxBuyPricePlanBuyOrderPair);
-						session.getTransaction().commit();
-					}else{
-						logger.debug("下计划买单失败！");
-						//delay(1000L);
-						//continue;
-					}
-				}
-			}
-			
-			if(planSellOrderPairs.size()>0){
-				Collections.sort(planSellOrderPairs, new Comparator<LiveOrderPair>() {
-					public int compare(LiveOrderPair o1, LiveOrderPair o2) {
-						return o1.getBuyOrderStatus().compareTo(o2.getBuyOrderStatus()) == 0 ?
-								o1.getSellOrderPrice().compareTo(o2.getSellOrderPrice()) :
-									o1.getBuyOrderStatus().compareTo(o2.getBuyOrderStatus());
-					}
-				});
-				LiveOrderPair minSellPricePlanSellOrderPair = planSellOrderPairs.get(0);
-				sellPrice = minSellPricePlanSellOrderPair.getSellOrderPrice();
-				if(isMeetPlanSellOrderCondition(sellPrice, minSellPrice, depth)){//满足下计划卖单的条件
-					Order order = exchange.order(OrderSide.SELL, minSellPricePlanSellOrderPair.getCurrency(),
-							minSellPricePlanSellOrderPair.getSellOrderQuantity(), sellPrice);
-					if(null != order){
-						isSell = true;
-						minSellPricePlanSellOrderPair.setSellOrderId(order.getOrderId());
-						minSellPricePlanSellOrderPair.setSellOrderStatus(order.getStatus());
-						liveSellOrderPairs.add(minSellPricePlanSellOrderPair);
-						planSellOrderPairs.remove(0);
-						Session session = HibernateUtil.getSession();
-						session.beginTransaction();
-						session.merge(minSellPricePlanSellOrderPair);
-						session.getTransaction().commit();
-					}else{
-						logger.error("下计划卖单失败！");
-					}
-				}
-			}
-			
-			if(isBuy || isSell){//此轮已经下单了
-				continue;
-			}
-			
-			// 根据行情来计算买单和卖单价格
-			this.calculatePrice(depth, ticker, pricePair);
-			buyPrice = pricePair.getBuyPrcie();
-			sellPrice = pricePair.getSellPrice();
-			
-			LiveOrderPair orderPair = new LiveOrderPair();
-			orderPair.setCreateTimestamp(System.currentTimeMillis());
-			orderPair.setModifyTimestamp(System.currentTimeMillis());
-			orderPair.setCurrency(currency);
-			orderPair.setPlantform(plantform);
-			orderPair.setBuyOrderPrice(buyPrice);
-			orderPair.setBuyOrderQuantity(quantity);
-			orderPair.setSellOrderPrice(sellPrice);
-			orderPair.setSellOrderQuantity(quantity);
-			
-			if(isMeetBuyOrderCondition(buyPrice, maxBuyPrice)){
-				Order buyOrder = exchange.order("BUY", currency, quantity, buyPrice);
-				if(null == buyOrder){
-					logger.debug("买单下单失败。");
-					isBuy = false;
-					//continue;
-				}else{
-					//买单下单成功
-					liveBuyOrderPairs.add(orderPair);
-					orderPair.setBuyOrderStatus(buyOrder.getStatus());
-					orderPair.setBuyOrderId(buyOrder.getOrderId());
-					isBuy = true;
-				}
-			}else{
-				isBuy = false;
-			}
-			
-			if(isMeetSellOrderCondition(sellPrice, minSellPrice)){
-				Order sellOrder = exchange.order("SELL", currency, quantity, sellPrice);
-				
-				//卖单若下单成功，则更新订单编号和状态，否则将订单设置为计划订单
-				if(null == sellOrder){
-					logger.debug("卖单下单失败。");
-					if(isBuy) {
-						logger.debug("买单下单成功，卖单下单失败，卖单将被转化为计划卖单。");
-					}
-					delay(1000L);
-					isSell = false;
-				}else{
-					liveSellOrderPairs.add(orderPair);
-					orderPair.setSellOrderId(sellOrder.getOrderId());
-					orderPair.setSellOrderStatus(sellOrder.getStatus());
-					isSell = true;
-				}
-			}else{
-				isSell = false;
-			}
-			
-			if(isSell || isBuy){//买单或者卖单下单成功了
-				
-				if(!isSell){//卖单下单失败
-					orderPair.setSellOrderStatus("PLAN");
-					planSellOrderPairs.add(orderPair);
-				}else if(!isBuy){//买单下单失败
-					orderPair.setBuyOrderStatus("PLAN");
-					planBuyOrderPairs.add(orderPair);
-				}
-				
-				//保存到数据库
-				Session session = HibernateUtil.getSession();
-				Transaction tx = session.beginTransaction();
-				session.save(orderPair);
-				tx.commit();
-				session.close();
-			}			
 		}
-		
 	}
 	
 	public static void main(String[] args){
-		WaveHedge hedge = new WaveHedge();
-		hedge
+		new WaveHedge()
+		.setExchangeName("hadax.com")
+		.setCurrencyPair("PNT_ETH")
+		.setQuantity(new BigDecimal("150"))
 		.setFeeRate(new BigDecimal("0.002"))
-		.setCurrency("HSR_QC")
-		.setCycle(1000L)
-		.setIntervalRate(new BigDecimal("0.008"))
-		.setMaxPrice(new BigDecimal("150"))
-		.setMinPrice(new BigDecimal("0.45"))
-		.setMaxProfitMargin(new BigDecimal("0.05"))
-		.setMinProfitMargin(new BigDecimal("0.01"))
-		.setPlantform("zb.com")
-		.setQuantity(new BigDecimal("0.01"))
-		.setPricePrecision(2)
-		.setFailedSleepTime(30000L);
-		
+		.setHighestPrice(new BigDecimal("0.001"))
+		.setLowestPrice(new BigDecimal("0.000005"))
+		.setPriceScale(8)
+		.setQuantityScale(2)
+		.setMinQuantity(new BigDecimal("100"))
+		.setIntervalRate(new BigDecimal("0.005"))
+		.setMinMarginRate(new BigDecimal("0.009"))
+		.setFailedSleepTime(60000L)
+		.setCycle(5000L)
+		.setUpdateBalanceFrequency(10000)
+		.setUpdateOrderFrequency(12)
+		.run(null);
 	}
-	
+
 }

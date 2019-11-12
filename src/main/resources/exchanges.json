@@ -1,12 +1,52 @@
 {
-	"zb.com":{
-		"key": "321",
-		"secret": "123",
-		"needProxy": true
-	},
-	"exx.com":{
-		"key": "",
-		"secret": "",
-		"needProxy":false
-	}
+  "zb.com": {
+    "key": "321",
+    "secret": "123",
+    "needProxy": true
+  },
+  "exx.com": {
+    "key": "",
+    "secret": "",
+    "needProxy": true
+  },
+  "bit-z.com": {
+    "key": "25ba25d0cea8831e8199e8febdd308e9",
+    "secret": "pSP6K9JDPDKq82z6rElt4tnL1MHxRG8KYNSJqVGe9ikxLo6x2rGEOYT2kEYM99oY",
+    "needProxy": true
+  },
+  "gate.io": {
+    "key": "494F2F38-8D1E-48F6-AEF5-E510F4034EAF",
+    "secret": "bc2a25e47f0e0b144179859acb46eac3fa4ccc171542bf5d0e47f98edc93833f",
+    "needProxy": true
+  },
+  "hadax.com": {
+    "key": "a185500f-6adc0b15-83095f9e-8a48d",
+    "secret": "ad4b7029-c1a370ee-23c50697-2a241",
+    "needProxy": true
+  },
+  "huobi.pro": {
+    "key": "a185500f-6adc0b15-83095f9e-8a48d",
+    "secret": "ad4b7029-c1a370ee-23c50697-2a241",
+    "needProxy": true
+  },
+  "vnbig.com": {
+    "key": "4e1cbd82-03e9-45f4-9a63-79a226abb951",
+    "secret": "C3D447C0D873F0046DB9F03B71661E4F",
+    "needProxy": false
+  },
+  "lbank.info": {
+    "key": "cd557ba7-6373-4d5f-842b-24b0e78306b8",
+    "secret": "5D7FC95BCFDACF7481074C4023B77A83",
+    "needProxy": true
+  },
+  "dragonex.io": {
+    "key": "90c05763875e55819c10a974d60d7aa7",
+    "secret": "e1dbc9065b825b99a14c22cb89920a57",
+    "needProxy": false
+  },
+  "fcoin.com": {
+    "key": "dbbac156cc6f4d0c8bf38eee65c4d020",
+    "secret": "4f0bc75e05da45be8f0de1317dd7933f",
+    "needProxy": true
+  }
 }

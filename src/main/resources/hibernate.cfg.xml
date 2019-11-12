@@ -4,22 +4,64 @@
 "http://www.hibernate.org/dtd/hibernate-configuration-3.0.dtd">
 <hibernate-configuration>
     <session-factory>
-        <property name="hibernate.bytecode.use_reflection_optimizer">false</property>
-        <property name="hibernate.connection.driver_class">com.mysql.jdbc.Driver</property>
-        <property name="hibernate.connection.password">${password}</property>
-        <property name="hibernate.connection.pool_size">10</property>
-        <property name="hibernate.connection.url">jdbc:mysql://39.108.113.223:3306/quant</property>
-        <property name="hibernate.connection.username">${user}</property>
-        <property name="hibernate.dialect">org.hibernate.dialect.MySQL5Dialect</property>
-        <property name="hibernate.search.autoregister_listeners">false</property>
-        <property name="hibernate.show_sql">false</property>
-        <property name="hibernate.test-after-use">true</property>
-        <property name="hibernate.test-before-use">true</property>
-        <property name="hibernate.testOnBorrow">true</property>
-        <property name="hibernate.validationQuery">SELECT 1</property>
-        <property name="hibernate.validator.apply_to_ddl">false</property>
+    	
+    	<!-- Druid 连接池 -->
+    	<property name="hibernate.connection.provider_class">com.alibaba.druid.support.hibernate.DruidConnectionProvider</property>
+        
+        <!-- 基本属性 url、user、password -->
+      <property name="url">jdbc:mysql://39.108.113.223:3306/quant?autoReconnect=true&amp;autoReconnectForPools=true</property>
+      <property name="username">quant</property>
+      <property name="password">nklfxnklfx</property>
+        
+      <!-- 配置初始化大小、最小、最大 -->
+      <property name="initialSize">1</property>
+      <property name="minIdle">1</property> 
+      <property name="maxActive">5</property>
+   
+      <!-- 配置获取连接等待超时的时间 -->
+      <property name="maxWait">60000</property>
+   
+      <!-- 配置间隔多久才进行一次检测，检测需要关闭的空闲连接，单位是毫秒 -->
+      <property name="timeBetweenEvictionRunsMillis">60000</property>
+   
+      <!-- 配置一个连接在池中最小生存的时间，单位是毫秒 -->
+      <property name="minEvictableIdleTimeMillis">300000</property>
+    
+      <property name="validationQuery">SELECT 'x'</property>
+      <property name="testWhileIdle">true</property>
+      <property name="testOnBorrow">true</property>
+      <property name="testOnReturn">false</property>
+      <property name="connection.url"><![CDATA[jdbc:mysql://39.108.113.223:3306/quant?autoReconnect=true&amp;autoReconnectForPools=true]]></property>
+      <property name="connection.driver_class">com.mysql.jdbc.Driver</property>
+
+
+      <!--  Hibernate 默认的连接池
+      <property name="hibernate.bytecode.use_reflection_optimizer">true</property>
+      <property name="hibernate.connection.driver_class">com.mysql.jdbc.Driver</property>
+      <property name="hibernate.connection.password"></property>
+      <property name="hibernate.connection.pool_size">10</property>
+      <property name="hibernate.connection.url">jdbc:mysql://39.108.113.223:3306/quant?autoReconnect=true&amp;autoReconnectForPools=true</property>
+      <property name="hibernate.connection.username"></property>
+      <property name="hibernate.dialect">org.hibernate.dialect.MySQL5Dialect</property>
+      <property name="hibernate.search.autoregister_listeners">true</property>
+      <property name="connection.release_mode">auto</property>
+      <property name="hibernate.show_sql">true</property>
+      <property name="hibernate.test-after-use">true</property>
+      <property name="hibernate.test-before-use">true</property>
+      <property name="hibernate.testOnBorrow">true</property>
+      <property name="hibernate.validationQuery">SELECT 1</property>
+      <property name="hibernate.validator.apply_to_ddl">true</property>
+      <property name="connection.autoReconnect">true</property>
+      <property name="connection.autoReconnectForPools">true</property>
+      <property name="connection.is-connection-validation-required">true</property>
+      <property name="hibernate.cache.provider_class">org.hibernate.cache.NoCacheProvider</property>
+       -->
         
         <mapping class="quant.entity.LiveOrderPair" />
         <mapping class="quant.entity.AssemblyHedgeOrder" />
+        <mapping class="quant.entity.CandidateAssemblyHedgeOrder" />
+        <mapping class="quant.entity.WaveHedgeOrder" />
+      <mapping class="quant.entity.TriangleArbitrageOrder"/>
+
     </session-factory>
 </hibernate-configuration>

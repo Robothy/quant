@@ -1,24 +1,56 @@
 <?xml version="1.0" encoding="UTF-8"?>
 
 <Configuration status="WARN">
+
+  
+
   <Appenders>
     <Console name="Console" target="SYSTEM_OUT">
-      <PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %l - %msg%n"/>
+      <PatternLayout>
+      	<!-- <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} %l - %msg%n</Pattern> -->
+      	<Pattern>%d %-5p  %m%n</Pattern>
+      </PatternLayout>
+      <ThresholdFilter level="DEBUG"/>
     </Console>
     
-    <!-- <File name="Orders" fileName="F:/trade.txt" >
-    	<PatternLayout pattern="%d{HH:mm:ss.SSS} [%t] %-5level %logger{36} %l - %msg%n"/>
-    </File> -->
     
-  <RollingFile name="RollingLogFile" fileName="logs/app.log"
-                 filePattern="logs/$${date:yyyy-MM}/app-%d{MM-dd-yyyy}-%i.log.gz">
+  <RollingFile name="RollingDebugLogFile" fileName="logs/app-debug.log"
+                 filePattern="logs/$${date:yyyy-MM}/$${date:dd}/app-debug-%d{MM-dd-yyyy}-%i.log.gz">
       <PatternLayout>
-        <Pattern>%d{yyyy-MM-dd HH:mm:ss.SSS} [%t] %-5level %logger{36} %l - %msg%n</Pattern>
+      	<Pattern>%d %-5p  %m%n</Pattern>
       </PatternLayout>
       <Policies>
         <TimeBasedTriggeringPolicy />
         <SizeBasedTriggeringPolicy size="20MB"/>
       </Policies>
+      <DefaultRolloverStrategy max="20" fileIndex="min" />
+      <ThresholdFilter level="DEBUG"/>
+  </RollingFile>
+  
+  <RollingFile name="RollingErrorLogFile" fileName="logs/app-info.log"
+                 filePattern="logs/$${date:yyyy-MM}/$${date:dd}/app-info-%d{MM-dd-yyyy}-%i.log.gz">
+      <PatternLayout>
+      	<Pattern>%d %-5p  %m%n</Pattern>
+      </PatternLayout>
+      <Policies>
+        <TimeBasedTriggeringPolicy />
+        <SizeBasedTriggeringPolicy size="20MB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="20" fileIndex="min" />
+      <ThresholdFilter level="INFO"/>
+  </RollingFile>
+  
+  <RollingFile name="RollingInfoLogFile" fileName="logs/app-error.log"
+                 filePattern="logs/$${date:yyyy-MM}/$${date:dd}/app-error-%d{MM-dd-yyyy}-%i.log.gz">
+      <PatternLayout>
+      	<Pattern>%d %-5p  %m%n</Pattern>
+      </PatternLayout>
+      <Policies>
+        <TimeBasedTriggeringPolicy />
+        <SizeBasedTriggeringPolicy size="20MB"/>
+      </Policies>
+      <DefaultRolloverStrategy max="20" fileIndex="min" />
+      <ThresholdFilter level="ERROR"/>
   </RollingFile>
     
   </Appenders>
@@ -30,16 +62,33 @@
   		<AppenderRef ref = "Console" />
   	</Logger> -->
   	
-  	<Logger name="org.hibernate.SQL" level="DEBUG">
+  	<Logger name="org.hibernate.SQL" level="DEBUG" additivity="false">
   		<AppenderRef ref = "Console" />
-	</Logger>	
-	
-	<Logger name="SimpleHedgeLogger" level="DEBUG" additivity="false">
-		<AppenderRef ref="RollingLogFile" />
+  		<AppenderRef ref="RollingDebugLogFile" />
 	</Logger>
 	
-    <Root level="DEBUG">
-      <AppenderRef ref="RollingLogFile" />
+	<Logger name="org.hibernate.type" level="TRACE" additivity="false">
+		<AppenderRef ref = "Console" />
+		<AppenderRef ref="RollingDebugLogFile" />
+	</Logger>
+	
+	
+	
+	<Logger name="quant" level="DEBUG" additivity="false">
+		<AppenderRef ref = "Console" />
+		<AppenderRef ref="RollingErrorLogFile" />
+		<AppenderRef ref="RollingInfoLogFile" />
+		<AppenderRef ref="RollingDebugLogFile" />
+	</Logger>
+	
+	<!-- <Logger name="SimpleHedgeLogger" level="DEBUG" additivity="false">
+		<AppenderRef ref="RollingLogFile" />
+	</Logger> -->
+	
+    <Root level="INFO">
+      <AppenderRef ref="RollingErrorLogFile" />
+	  <AppenderRef ref="RollingInfoLogFile" />
+	  <AppenderRef ref="RollingDebugLogFile" />
       <AppenderRef ref = "Console" />
     </Root>
   </Loggers>
